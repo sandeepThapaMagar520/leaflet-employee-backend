@@ -94,8 +94,6 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.10.1</version>
                 <configuration>
-                    <fork>true</fork>
-                    <executable>${env.JAVA_HOME}/bin/javac</executable>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>

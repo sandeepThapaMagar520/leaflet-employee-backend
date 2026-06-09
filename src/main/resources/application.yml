@@ -31,6 +31,8 @@ spring:
     locations: classpath:db/migration
 
 app:
+  cors:
+    allowed-origin-patterns: ${ALLOWED_ORIGIN_PATTERNS:http://localhost:3000,http://localhost:3001}
   security:
     jwt:
       secret: ${JWT_SECRET:replace_this_with_minimum_32_characters_secret}

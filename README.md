@@ -28,6 +28,32 @@ When the backend is running:
 - Swagger UI: `http://localhost:8080/swagger-ui.html`
 - OpenAPI JSON: `http://localhost:8080/v3/api-docs`
 
+## Render Deployment
+
+Create a Render Web Service from this repository.
+
+- Runtime: Java
+- Branch: `main`
+- Build command: `mvn clean package -DskipTests`
+- Start command: `java -jar target/backend-0.0.1-SNAPSHOT.jar`
+- Health check path: `/api/v1/health`
+
+Required environment variables:
+
+```bash
+DB_URL=jdbc:postgresql://db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+DB_USERNAME=postgres.<project-ref>
+DB_PASSWORD=<supabase_db_password>
+JWT_SECRET=<minimum_32_character_secret>
+JWT_EXPIRATION_MS=86400000
+ALLOWED_ORIGIN_PATTERNS=http://localhost:3000,https://<your-frontend-domain>
+CLOUDINARY_CLOUD_NAME=<your_cloud_name>
+CLOUDINARY_UPLOAD_PRESET=<your_unsigned_upload_preset>
+SHOW_SQL=false
+```
+
+Render provides the `PORT` environment variable automatically, so it does not need to be set manually.
+
 ## Environment
 
 Use `.env.example` as the template for local configuration. Do not commit `.env` or production secrets.
