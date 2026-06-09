@@ -32,10 +32,10 @@ When the backend is running:
 
 Create a Render Web Service from this repository.
 
-- Runtime: Java
+- Runtime: Docker
 - Branch: `main`
-- Build command: `mvn clean package -DskipTests`
-- Start command: `java -jar target/backend-0.0.1-SNAPSHOT.jar`
+- Dockerfile path: `./Dockerfile`
+- Docker command: leave empty
 - Health check path: `/api/v1/health`
 
 Required environment variables:
