@@ -25,7 +25,7 @@ The API runs at `http://localhost:8080`.
 
 When the backend is running:
 
-- Swagger UI: `http://localhost:8080/swagger-ui.html`
+- Swagger UI: `http://localhost:8080/docs`
 - OpenAPI JSON: `http://localhost:8080/v3/api-docs`
 
 ## Render Deployment
