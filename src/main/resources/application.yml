@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: employee-management-backend
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/employee_management}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    hikari:
+      # Supabase closes idle connections after ~5 min — keep maxLifetime well below that
+      maximum-pool-size: 5
+      minimum-idle: 2
+      max-lifetime: 240000          # 4 min — evict connections before Supabase kills them
+      keepalive-time: 60000         # send keepalive ping every 60 s to prevent idle timeout
+      connection-timeout: 20000     # fail fast if no connection available in 20 s
+      idle-timeout: 120000          # evict idle connections after 2 min
+      connection-test-query: SELECT 1
+      validation-timeout: 3000
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: ${SHOW_SQL:false}
+    properties:
+      hibernate:
+        format_sql: false
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+app:
+  security:
+    jwt:
+      secret: ${JWT_SECRET:replace_this_with_minimum_32_characters_secret}
+      expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+  cloudinary:
+    cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+    upload-preset: ${CLOUDINARY_UPLOAD_PRESET:}
+
+server:
+  port: ${PORT:8080}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true

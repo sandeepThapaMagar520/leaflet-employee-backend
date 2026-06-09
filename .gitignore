@@ -1,0 +1,18 @@
+.DS_Store
+
+# Build output
+target/
+
+# Environment and local tooling
+.env
+.env.local
+.env.*.local
+.toolchain/
+employee-backend/
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
