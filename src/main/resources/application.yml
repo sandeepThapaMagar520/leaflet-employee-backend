@@ -33,6 +33,10 @@ spring:
 app:
   cors:
     allowed-origin-patterns: ${ALLOWED_ORIGIN_PATTERNS:http://localhost:3000,http://localhost:3001}
+  attendance:
+    zone-id: ${ATTENDANCE_ZONE_ID:Asia/Kathmandu}
+    required-minutes: ${ATTENDANCE_REQUIRED_MINUTES:420}
+    grace-minutes: ${ATTENDANCE_GRACE_MINUTES:360}
   security:
     jwt:
       secret: ${JWT_SECRET:replace_this_with_minimum_32_characters_secret}
