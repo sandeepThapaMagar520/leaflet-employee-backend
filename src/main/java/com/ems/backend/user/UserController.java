@@ -16,6 +16,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import jakarta.validation.Valid;
+import com.ems.backend.user.dto.NotificationPreferencesResponse;
+import com.ems.backend.user.dto.ProfileResponse;
+import com.ems.backend.user.dto.UpdateNotificationPreferencesRequest;
+import com.ems.backend.user.dto.UpdateProfileRequest;
 import com.ems.backend.user.dto.UpdateUserRequest;
 
 import java.util.List;
@@ -25,9 +29,41 @@ import java.util.List;
 @Tag(name = "Users", description = "Staff directory and admin user management")
 public class UserController {
     private final UserService userService;
+    private final UserProfileService userProfileService;
 
-    public UserController(UserService userService) {
+    public UserController(UserService userService, UserProfileService userProfileService) {
         this.userService = userService;
+        this.userProfileService = userProfileService;
+    }
+
+    @GetMapping("/me")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "My profile", description = "Returns the authenticated user's profile and account status.")
+    public ProfileResponse getMyProfile() {
+        return userProfileService.getMyProfile();
+    }
+
+    @PutMapping("/me")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "Update my profile", description = "Self-service update for personal profile fields and photo URL.")
+    public ProfileResponse updateMyProfile(@Valid @RequestBody UpdateProfileRequest request) {
+        return userProfileService.updateMyProfile(request);
+    }
+
+    @GetMapping("/me/notification-preferences")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "Notification preferences", description = "Returns email notification preferences for the authenticated user.")
+    public NotificationPreferencesResponse getNotificationPreferences() {
+        return userProfileService.getNotificationPreferences();
+    }
+
+    @PutMapping("/me/notification-preferences")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "Update notification preferences", description = "Updates email notification preferences for the authenticated user.")
+    public NotificationPreferencesResponse updateNotificationPreferences(
+            @Valid @RequestBody UpdateNotificationPreferencesRequest request
+    ) {
+        return userProfileService.updateNotificationPreferences(request);
     }
 
     @GetMapping

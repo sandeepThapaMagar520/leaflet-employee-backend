@@ -8,6 +8,9 @@ public record AuthResponse(
         Long userId,
         String fullName,
         String email,
-        Role role
+        Role role,
+        Boolean emailVerified,
+        Boolean mustChangePassword,
+        String profilePhotoUrl
 ) {
 }

@@ -11,6 +11,8 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.time.Instant;
+
 @Getter
 @Setter
 @Entity
@@ -35,4 +37,56 @@ public class User {
 
     @Column(nullable = false)
     private Boolean active = true;
+
+    @Column(name = "profile_photo_url")
+    private String profilePhotoUrl;
+
+    private String phone;
+
+    @Column(name = "job_title")
+    private String jobTitle;
+
+    private String department;
+
+    @Column(nullable = false)
+    private String timezone = "Asia/Kathmandu";
+
+    @Column(name = "email_verified", nullable = false)
+    private Boolean emailVerified = false;
+
+    @Column(name = "email_verification_token")
+    private String emailVerificationToken;
+
+    @Column(name = "email_verification_expires_at")
+    private Instant emailVerificationExpiresAt;
+
+    @Column(name = "last_login_at")
+    private Instant lastLoginAt;
+
+    @Column(name = "password_changed_at")
+    private Instant passwordChangedAt;
+
+    @Column(name = "must_change_password", nullable = false)
+    private Boolean mustChangePassword = false;
+
+    @Column(name = "password_otp")
+    private String passwordOtp;
+
+    @Column(name = "password_otp_expires_at")
+    private Instant passwordOtpExpiresAt;
+
+    @Column(name = "password_reset_token")
+    private String passwordResetToken;
+
+    @Column(name = "password_reset_expires_at")
+    private Instant passwordResetExpiresAt;
+
+    @Column(name = "pending_email")
+    private String pendingEmail;
+
+    @Column(name = "email_change_otp")
+    private String emailChangeOtp;
+
+    @Column(name = "email_change_otp_expires_at")
+    private Instant emailChangeOtpExpiresAt;
 }

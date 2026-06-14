@@ -52,6 +52,20 @@ CLOUDINARY_UPLOAD_PRESET=<your_unsigned_upload_preset>
 SHOW_SQL=false
 ```
 
+Optional Gmail email settings (verification + notification emails):
+
+```bash
+MAIL_ENABLED=true
+MAIL_HOST=smtp.gmail.com
+MAIL_PORT=587
+MAIL_USERNAME=your.email@gmail.com
+MAIL_PASSWORD=<google_app_password>
+MAIL_FROM=your.email@gmail.com
+FRONTEND_BASE_URL=https://<your-frontend-domain>
+```
+
+Gmail requires 2-Step Verification and a Google App Password. Use the same address for `MAIL_USERNAME` and `MAIL_FROM`.
+
 Render provides the `PORT` environment variable automatically, so it does not need to be set manually.
 
 ## Environment

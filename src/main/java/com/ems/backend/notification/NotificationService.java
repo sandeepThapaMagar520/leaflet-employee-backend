@@ -1,8 +1,10 @@
 package com.ems.backend.notification;
 
 import com.ems.backend.common.SecurityUtils;
+import com.ems.backend.mail.EmailService;
 import com.ems.backend.notification.dto.NotificationResponse;
 import com.ems.backend.user.User;
+import com.ems.backend.user.UserProfileService;
 import com.ems.backend.user.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,15 +20,21 @@ public class NotificationService {
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
     private final SecurityUtils securityUtils;
+    private final UserProfileService userProfileService;
+    private final EmailService emailService;
 
     public NotificationService(
             NotificationRepository notificationRepository,
             UserRepository userRepository,
-            SecurityUtils securityUtils
+            SecurityUtils securityUtils,
+            UserProfileService userProfileService,
+            EmailService emailService
     ) {
         this.notificationRepository = notificationRepository;
         this.userRepository = userRepository;
         this.securityUtils = securityUtils;
+        this.userProfileService = userProfileService;
+        this.emailService = emailService;
     }
 
     public void notifyUser(User user, NotificationType type, String title, String message, String link) {
@@ -43,6 +51,10 @@ public class NotificationService {
         notification.setMessage(message);
         notification.setLink(link);
         notificationRepository.save(notification);
+
+        if (userProfileService.shouldEmailForNotification(user, type)) {
+            emailService.sendNotificationEmail(user.getEmail(), type, title, message, link);
+        }
     }
 
     public void notifyUserId(Long userId, NotificationType type, String title, String message, String link) {
