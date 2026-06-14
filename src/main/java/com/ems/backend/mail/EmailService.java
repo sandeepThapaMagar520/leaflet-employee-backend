@@ -6,6 +6,7 @@ import com.ems.backend.config.MailProperties;
 import com.ems.backend.notification.NotificationType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -23,6 +24,7 @@ public class EmailService {
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
+    @Autowired
     public EmailService(MailProperties mailProperties, ObjectMapper objectMapper) {
         this(
                 mailProperties,
