@@ -36,6 +36,7 @@ public class SecurityConfig {
                                 "/",
                                 "/api/v1/health",
                                 "/api/v1/auth/login",
+                                "/api/v1/auth/start-account-setup",
                                 "/api/v1/auth/verify-email",
                                 "/api/v1/auth/forgot-password",
                                 "/api/v1/auth/verify-password-otp",

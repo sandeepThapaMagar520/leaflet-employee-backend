@@ -2,6 +2,7 @@ package com.ems.backend.user;
 
 import com.ems.backend.common.PageResponse;
 import com.ems.backend.user.dto.UserResponse;
+import com.ems.backend.user.dto.StaffOverviewResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
@@ -30,10 +31,16 @@ import java.util.List;
 public class UserController {
     private final UserService userService;
     private final UserProfileService userProfileService;
+    private final StaffOverviewService staffOverviewService;
 
-    public UserController(UserService userService, UserProfileService userProfileService) {
+    public UserController(
+            UserService userService,
+            UserProfileService userProfileService,
+            StaffOverviewService staffOverviewService
+    ) {
         this.userService = userService;
         this.userProfileService = userProfileService;
+        this.staffOverviewService = staffOverviewService;
     }
 
     @GetMapping("/me")
@@ -78,6 +85,13 @@ public class UserController {
             return userService.getUsersPaged(page != null ? page : 0, size != null ? size : 20, search);
         }
         return userService.getAllUsers();
+    }
+
+    @GetMapping("/{id}/overview")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Staff overview", description = "Admin-only operational record for one staff member.")
+    public StaffOverviewResponse getStaffOverview(@PathVariable Long id) {
+        return staffOverviewService.getOverview(id);
     }
 
     @PutMapping("/{id}")

@@ -9,6 +9,7 @@ import com.ems.backend.auth.dto.RegisterRequest;
 import com.ems.backend.auth.dto.RequestEmailChange;
 import com.ems.backend.auth.dto.SetPasswordRequest;
 import com.ems.backend.auth.dto.StaffRegistrationResponse;
+import com.ems.backend.auth.dto.StartAccountSetupRequest;
 import com.ems.backend.auth.dto.VerifyEmailChange;
 import com.ems.backend.auth.dto.VerifyPasswordOtpRequest;
 import com.ems.backend.mail.EmailService;
@@ -66,22 +67,41 @@ public class AuthService {
         User user = new User();
         user.setFullName(request.fullName().trim());
         user.setEmail(email);
-        user.setPassword(passwordEncoder.encode(UUID.randomUUID().toString()));
+        user.setPassword(passwordEncoder.encode(request.temporaryPassword()));
         user.setRole(request.role());
+        user.setJobTitle(request.jobTitle().trim());
         user.setMustChangePassword(true);
         user.setEmailVerified(false);
 
         User saved = userRepository.save(user);
         userProfileService.getOrCreateSettings(saved);
-        issuePasswordOtp(saved, true);
+        emailService.sendTemporaryPassword(
+                saved.getEmail(),
+                saved.getFullName(),
+                request.temporaryPassword()
+        );
 
         return new StaffRegistrationResponse(
                 saved.getId(),
                 saved.getFullName(),
                 saved.getEmail(),
                 saved.getRole(),
-                "Staff registered. A password setup OTP was sent to " + saved.getEmail() + "."
+                "Staff registered. The temporary password and setup link were sent to " + saved.getEmail() + "."
         );
+    }
+
+    public void startAccountSetup(StartAccountSetupRequest request) {
+        String email = request.email().trim().toLowerCase();
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid email or temporary password."));
+
+        if (Boolean.FALSE.equals(user.getActive())
+                || !Boolean.TRUE.equals(user.getMustChangePassword())
+                || !passwordEncoder.matches(request.temporaryPassword(), user.getPassword())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid email or temporary password.");
+        }
+
+        issuePasswordOtp(user, true);
     }
 
     public AuthResponse login(LoginRequest request) {
@@ -102,7 +122,7 @@ public class AuthService {
         if (Boolean.TRUE.equals(user.getMustChangePassword())) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
-                    "Complete your account setup using the OTP sent to your email before signing in."
+                    "Complete first-time account setup using your temporary password before signing in."
             );
         }
 
@@ -172,7 +192,8 @@ public class AuthService {
     public void requestPasswordReset(PasswordResetRequest request) {
         userRepository.findByEmail(request.email().trim().toLowerCase())
                 .filter(user -> !Boolean.FALSE.equals(user.getActive()))
-                .ifPresent(user -> issuePasswordOtp(user, Boolean.TRUE.equals(user.getMustChangePassword())));
+                .filter(user -> !Boolean.TRUE.equals(user.getMustChangePassword()))
+                .ifPresent(user -> issuePasswordOtp(user, false));
     }
 
     public OtpVerificationResponse verifyPasswordOtp(VerifyPasswordOtpRequest request) {

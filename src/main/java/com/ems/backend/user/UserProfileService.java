@@ -51,12 +51,6 @@ public class UserProfileService {
         if (request.phone() != null) {
             user.setPhone(request.phone().isBlank() ? null : request.phone().trim());
         }
-        if (request.jobTitle() != null) {
-            user.setJobTitle(request.jobTitle().isBlank() ? null : request.jobTitle().trim());
-        }
-        if (request.department() != null) {
-            user.setDepartment(request.department().isBlank() ? null : request.department().trim());
-        }
         if (request.timezone() != null && !request.timezone().isBlank()) {
             user.setTimezone(request.timezone().trim());
         }
