@@ -5,17 +5,17 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "app.mail")
 public record MailProperties(
         boolean enabled,
-        String from,
-        String username,
+        String provider,
+        String googleWebhookUrl,
+        String googleWebhookSecret,
+        String fromName,
         String frontendBaseUrl
 ) {
-    public String resolvedFromAddress() {
-        if (from != null && !from.isBlank()) {
-            return from.trim();
-        }
-        if (username != null && !username.isBlank()) {
-            return username.trim();
-        }
-        return null;
+    public boolean usesGoogleAppsScript() {
+        return provider != null && provider.equalsIgnoreCase("GOOGLE_APPS_SCRIPT");
+    }
+
+    public String resolvedFromName() {
+        return fromName == null || fromName.isBlank() ? "Leaflet EMS" : fromName.trim();
     }
 }

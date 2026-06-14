@@ -52,19 +52,19 @@ CLOUDINARY_UPLOAD_PRESET=<your_unsigned_upload_preset>
 SHOW_SQL=false
 ```
 
-Optional Gmail email settings (verification + notification emails):
+Google Apps Script email settings (verification, OTP, and notification emails):
 
 ```bash
 MAIL_ENABLED=true
-MAIL_HOST=smtp.gmail.com
-MAIL_PORT=587
-MAIL_USERNAME=your.email@gmail.com
-MAIL_PASSWORD=<google_app_password>
-MAIL_FROM=your.email@gmail.com
+MAIL_PROVIDER=GOOGLE_APPS_SCRIPT
+GOOGLE_MAIL_WEBHOOK_URL=https://script.google.com/macros/s/<deployment-id>/exec
+GOOGLE_MAIL_WEBHOOK_SECRET=<shared-webhook-secret>
+MAIL_FROM_NAME=Leaflet EMS
 FRONTEND_BASE_URL=https://<your-frontend-domain>
 ```
 
-Gmail requires 2-Step Verification and a Google App Password. Use the same address for `MAIL_USERNAME` and `MAIL_FROM`.
+Store the same secret in the Apps Script `WEBHOOK_SECRET` script property. The web app must execute as the
+script owner and allow access to anyone. OTP values are never written to application logs.
 
 Render provides the `PORT` environment variable automatically, so it does not need to be set manually.
 

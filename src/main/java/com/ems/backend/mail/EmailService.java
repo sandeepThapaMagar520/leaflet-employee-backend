@@ -1,26 +1,43 @@
 package com.ems.backend.mail;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ems.backend.config.MailProperties;
 import com.ems.backend.notification.NotificationType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.Map;
 
 @Service
 public class EmailService {
     private static final Logger log = LoggerFactory.getLogger(EmailService.class);
 
-    private final JavaMailSender mailSender;
     private final MailProperties mailProperties;
+    private final ObjectMapper objectMapper;
+    private final HttpClient httpClient;
 
-    public EmailService(
-            org.springframework.beans.factory.ObjectProvider<JavaMailSender> mailSenderProvider,
-            MailProperties mailProperties
-    ) {
-        this.mailSender = mailSenderProvider.getIfAvailable();
+    public EmailService(MailProperties mailProperties, ObjectMapper objectMapper) {
+        this(
+                mailProperties,
+                objectMapper,
+                HttpClient.newBuilder()
+                        .connectTimeout(Duration.ofSeconds(10))
+                        .followRedirects(HttpClient.Redirect.ALWAYS)
+                        .build()
+        );
+    }
+
+    EmailService(MailProperties mailProperties, ObjectMapper objectMapper, HttpClient httpClient) {
         this.mailProperties = mailProperties;
+        this.objectMapper = objectMapper;
+        this.httpClient = httpClient;
     }
 
     public boolean sendVerificationEmail(String toEmail, String fullName, String token) {
@@ -41,7 +58,7 @@ public class EmailService {
 
         boolean sent = send(toEmail, subject, body);
         if (!sent) {
-            log.info("Email verification link for {}: {}", toEmail, link);
+            log.warn("Email verification delivery failed for {}", toEmail);
         }
         return sent;
     }
@@ -72,7 +89,7 @@ public class EmailService {
 
         boolean sent = send(toEmail, subject, body);
         if (!sent) {
-            log.info("Password OTP for {}: {} (setup link: {})", toEmail, otp, link);
+            log.warn("Password OTP delivery failed for {}", toEmail);
         }
         return sent;
     }
@@ -93,7 +110,7 @@ public class EmailService {
 
         boolean sent = send(toEmail, subject, body);
         if (!sent) {
-            log.info("Email change OTP for {}: {}", toEmail, otp);
+            log.warn("Email change OTP delivery failed for {}", toEmail);
         }
         return sent;
     }
@@ -111,29 +128,53 @@ public class EmailService {
     }
 
     private boolean send(String toEmail, String subject, String body) {
-        if (!mailProperties.enabled() || mailSender == null) {
-            log.debug("Mail disabled — skipped sending '{}' to {}", subject, toEmail);
+        if (!mailProperties.enabled()) {
+            log.debug("Mail disabled - skipped sending '{}' to {}", subject, toEmail);
             return false;
         }
 
-        String fromAddress = mailProperties.resolvedFromAddress();
-        if (fromAddress == null) {
-            log.warn("Mail enabled but MAIL_FROM / MAIL_USERNAME is missing — skipped sending '{}' to {}", subject, toEmail);
+        if (!mailProperties.usesGoogleAppsScript()) {
+            log.error("Unsupported mail provider '{}'", mailProperties.provider());
+            return false;
+        }
+
+        if (isBlank(mailProperties.googleWebhookUrl()) || isBlank(mailProperties.googleWebhookSecret())) {
+            log.error("Google Apps Script mail is enabled but its webhook URL or secret is missing");
             return false;
         }
 
         try {
-            SimpleMailMessage message = new SimpleMailMessage();
-            message.setFrom(fromAddress);
-            message.setTo(toEmail);
-            message.setSubject(subject);
-            message.setText(body);
-            mailSender.send(message);
+            String payload = objectMapper.writeValueAsString(Map.of(
+                    "secret", mailProperties.googleWebhookSecret(),
+                    "to", toEmail,
+                    "subject", subject,
+                    "body", body,
+                    "fromName", mailProperties.resolvedFromName()
+            ));
+            HttpRequest request = HttpRequest.newBuilder(URI.create(mailProperties.googleWebhookUrl()))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            JsonNode responseBody = objectMapper.readTree(response.body());
+
+            if (response.statusCode() < 200
+                    || response.statusCode() >= 300
+                    || !responseBody.path("success").asBoolean(false)) {
+                log.error("Mail webhook rejected '{}' to {} with HTTP {}", subject, toEmail, response.statusCode());
+                return false;
+            }
+
             log.info("Sent email '{}' to {}", subject, toEmail);
             return true;
         } catch (Exception ex) {
             log.error("Failed to send email '{}' to {}: {}", subject, toEmail, ex.getMessage());
             return false;
         }
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 }
