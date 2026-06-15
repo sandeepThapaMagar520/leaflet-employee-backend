@@ -16,6 +16,7 @@ public record UpdateProjectRequest(
         LocalDate dueDate,
         @NotNull Long managerId,
         List<Long> assignedEmployeeIds,
+        List<ProjectMemberPermissionRequest> memberPermissions,
         String clientNotes,
         String documentUrl,
         BigDecimal budgetAmount,

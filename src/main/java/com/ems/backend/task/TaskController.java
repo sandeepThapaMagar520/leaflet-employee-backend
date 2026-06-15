@@ -28,8 +28,8 @@ public class TaskController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    @Operation(summary = "Create task", description = "Admin and manager endpoint for assigning a task to an employee or manager.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "Create task", description = "Project managers, admins, and delegated employees can assign tasks to project team members.")
     public TaskResponse createTask(@Valid @RequestBody CreateTaskRequest request) {
         return taskService.createTask(request);
     }
@@ -62,8 +62,8 @@ public class TaskController {
     }
 
     @PutMapping("/{taskId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    @Operation(summary = "Update task", description = "Admin and manager endpoint for editing task details, priority, due date, assignee, and status.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "Update task", description = "Project managers, admins, and delegated employees can edit task details.")
     public TaskResponse updateTask(
             @PathVariable Long taskId,
             @Valid @RequestBody UpdateTaskRequest request
@@ -83,7 +83,7 @@ public class TaskController {
 
     @DeleteMapping("/{taskId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "Delete task")
     public void deleteTask(@PathVariable Long taskId) {
         taskService.deleteTask(taskId);

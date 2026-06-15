@@ -1,6 +1,6 @@
 package com.ems.backend.project;
 
 public enum ProjectNoteType {
-    CLIENT,
-    INTERNAL
+    TEAM,
+    ADMIN_ONLY
 }

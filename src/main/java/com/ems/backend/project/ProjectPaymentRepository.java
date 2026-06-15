@@ -21,6 +21,12 @@ public interface ProjectPaymentRepository extends JpaRepository<ProjectPayment, 
     @Query("select coalesce(sum(p.amount), 0) from ProjectPayment p where p.project.id = :projectId")
     BigDecimal sumAmountByProjectId(@Param("projectId") Long projectId);
 
+    @Query("select p from ProjectPayment p join fetch p.createdBy where p.id = :paymentId and p.project.id = :projectId")
+    Optional<ProjectPayment> findByIdAndProjectIdWithCreator(
+            @Param("paymentId") Long paymentId,
+            @Param("projectId") Long projectId
+    );
+
     default Optional<ProjectPayment> findLatestByProjectId(Long projectId) {
         List<ProjectPayment> rows = findAllByProjectIdWithCreatorOrderByPaidAtDesc(projectId, PageRequest.of(0, 1));
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));

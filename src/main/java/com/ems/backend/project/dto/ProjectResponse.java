@@ -30,5 +30,10 @@ public record ProjectResponse(
         Instant createdAt,
         Instant updatedAt
 ) {
-    public record ProjectEmployeeResponse(Long id, String fullName) {}
+    public record ProjectEmployeeResponse(
+            Long id,
+            String fullName,
+            boolean canManageTasks,
+            boolean canAddNotes
+    ) {}
 }

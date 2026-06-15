@@ -57,8 +57,32 @@ public class ProjectAccessService {
         return project;
     }
 
-    public boolean canManageNotes(User user) {
-        return user.getRole() == Role.ADMIN || user.getRole() == Role.MANAGER;
+    public boolean canManageTasks(User user, Project project) {
+        return canManageProject(user, project)
+                || user.getRole() == Role.EMPLOYEE
+                && Boolean.TRUE.equals(projectRepository.canMemberManageTasks(project.getId(), user.getId()));
+    }
+
+    public Project requireTaskManageableProject(Long projectId, User user) {
+        Project project = requireAccessibleProject(projectId, user);
+        if (!canManageTasks(user, project)) {
+            throw new ResponseStatusException(FORBIDDEN, "You do not have permission to manage tasks for this project");
+        }
+        return project;
+    }
+
+    public boolean canAddNotes(User user, Project project) {
+        return canManageProject(user, project)
+                || user.getRole() == Role.EMPLOYEE
+                && Boolean.TRUE.equals(projectRepository.canMemberAddNotes(project.getId(), user.getId()));
+    }
+
+    public boolean canManageNotes(User user, Project project) {
+        return canManageProject(user, project);
+    }
+
+    public boolean canViewAdminOnlyNotes(User user, Project project) {
+        return canManageProject(user, project);
     }
 
     public boolean canViewFinancials(User user) {
