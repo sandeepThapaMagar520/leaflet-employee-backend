@@ -84,6 +84,17 @@ public class ProjectController {
         return projectService.addPayment(projectId, request);
     }
 
+    @PutMapping("/{projectId}/payments/{paymentId}/attachments")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @Operation(summary = "Update payment bills", description = "Replaces the optional bill attachments saved for a project payment.")
+    public PaymentResponse updatePaymentAttachments(
+            @PathVariable Long projectId,
+            @PathVariable Long paymentId,
+            @Valid @RequestBody UpdatePaymentAttachmentsRequest request
+    ) {
+        return projectService.updatePaymentAttachments(projectId, paymentId, request);
+    }
+
     @GetMapping("/{projectId}/notes")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List project notes", description = "Returns project notes, optionally filtered by note type.")
@@ -105,7 +116,7 @@ public class ProjectController {
     }
 
     @PutMapping("/notes/{noteId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "Update project note")
     public ProjectNoteResponse updateNote(
             @PathVariable Long noteId,
@@ -116,7 +127,7 @@ public class ProjectController {
 
     @DeleteMapping("/notes/{noteId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "Delete project note")
     public void deleteNote(@PathVariable Long noteId) {
         projectService.deleteNote(noteId);

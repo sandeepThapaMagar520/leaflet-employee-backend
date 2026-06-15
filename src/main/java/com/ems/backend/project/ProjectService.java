@@ -28,6 +28,11 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 @Service
 @Transactional
 public class ProjectService {
+    private static final Set<String> PAYMENT_ATTACHMENT_TYPES = Set.of(
+            "application/pdf",
+            "image/jpeg",
+            "image/png"
+    );
     private final ProjectRepository projectRepository;
     private final UserRepository userRepository;
     private final TaskRepository taskRepository;
@@ -93,6 +98,8 @@ public class ProjectService {
             saved.setAssignedEmployees(employees);
             notifyNewlyAssignedEmployees(saved, Set.of(), employees);
             saved = projectRepository.save(saved);
+            projectRepository.flush();
+            applyMemberPermissions(saved.getId(), employees, request.memberPermissions());
         }
 
         return map(saved);
@@ -159,6 +166,9 @@ public class ProjectService {
                     .collect(Collectors.toSet());
             project.setAssignedEmployees(employees);
             notifyNewlyAssignedEmployees(project, previousIds, employees);
+            projectRepository.save(project);
+            projectRepository.flush();
+            applyMemberPermissions(project.getId(), employees, request.memberPermissions());
         }
 
         return map(projectRepository.save(project));
@@ -193,17 +203,31 @@ public class ProjectService {
         payment.setPaidAt(request.paidAt());
         payment.setReferenceNote(request.referenceNote());
         payment.setCreatedBy(currentUser);
+        replacePaymentAttachments(payment, request.attachments());
+        return mapPayment(projectPaymentRepository.save(payment));
+    }
+
+    public PaymentResponse updatePaymentAttachments(
+            Long projectId,
+            Long paymentId,
+            UpdatePaymentAttachmentsRequest request
+    ) {
+        User currentUser = getCurrentUser();
+        projectAccessService.requireManageableProject(projectId, currentUser);
+        ProjectPayment payment = projectPaymentRepository.findByIdAndProjectIdWithCreator(paymentId, projectId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Payment not found"));
+        replacePaymentAttachments(payment, request.attachments());
         return mapPayment(projectPaymentRepository.save(payment));
     }
 
     public List<ProjectNoteResponse> listNotes(Long projectId, ProjectNoteType type) {
         User currentUser = getCurrentUser();
-        projectAccessService.requireAccessibleProject(projectId, currentUser);
+        Project project = projectAccessService.requireAccessibleProject(projectId, currentUser);
 
         List<ProjectNote> notes;
         if (type != null) {
-            if (type == ProjectNoteType.INTERNAL && !projectAccessService.canManageNotes(currentUser)) {
-                throw new ResponseStatusException(FORBIDDEN, "You do not have permission to view internal notes");
+            if (type == ProjectNoteType.ADMIN_ONLY && !projectAccessService.canViewAdminOnlyNotes(currentUser, project)) {
+                throw new ResponseStatusException(FORBIDDEN, "You do not have permission to view admin-only notes");
             }
             notes = projectNoteRepository.findAllByProjectIdAndNoteTypeWithCreatorOrderByCreatedAtDesc(projectId, type);
         } else {
@@ -211,7 +235,8 @@ public class ProjectService {
         }
 
         return notes.stream()
-                .filter(note -> projectAccessService.canManageNotes(currentUser) || note.getNoteType() == ProjectNoteType.CLIENT)
+                .filter(note -> projectAccessService.canViewAdminOnlyNotes(currentUser, project)
+                        || note.getNoteType() == ProjectNoteType.TEAM)
                 .map(this::mapNote)
                 .toList();
     }
@@ -219,8 +244,12 @@ public class ProjectService {
     public ProjectNoteResponse addNote(Long projectId, com.ems.backend.project.dto.CreateProjectNoteRequest request) {
         User currentUser = getCurrentUser();
         Project project = projectAccessService.requireAccessibleProject(projectId, currentUser);
-        if (request.noteType() == ProjectNoteType.INTERNAL && !projectAccessService.canManageNotes(currentUser)) {
-            throw new ResponseStatusException(FORBIDDEN, "Employees can only add client notes");
+        if (!projectAccessService.canAddNotes(currentUser, project)) {
+            throw new ResponseStatusException(FORBIDDEN, "You do not have permission to add notes to this project");
+        }
+        if (request.noteType() == ProjectNoteType.ADMIN_ONLY
+                && !projectAccessService.canManageNotes(currentUser, project)) {
+            throw new ResponseStatusException(FORBIDDEN, "Employees can add only project-team notes");
         }
 
         ProjectNote note = new ProjectNote();
@@ -235,13 +264,9 @@ public class ProjectService {
         User currentUser = getCurrentUser();
         ProjectNote note = projectNoteRepository.findByIdWithDetails(noteId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Note not found"));
-        projectAccessService.requireAccessibleProject(note.getProject().getId(), currentUser);
-
-        if (!projectAccessService.canManageNotes(currentUser) && !note.getCreatedBy().getId().equals(currentUser.getId())) {
-            throw new ResponseStatusException(FORBIDDEN, "You can only edit your own notes");
-        }
-        if (request.noteType() == ProjectNoteType.INTERNAL && !projectAccessService.canManageNotes(currentUser)) {
-            throw new ResponseStatusException(FORBIDDEN, "Employees can only edit client notes");
+        Project project = projectAccessService.requireAccessibleProject(note.getProject().getId(), currentUser);
+        if (!projectAccessService.canManageNotes(currentUser, project)) {
+            throw new ResponseStatusException(FORBIDDEN, "Only admins and the project manager can edit notes");
         }
 
         note.setContent(request.content());
@@ -253,10 +278,9 @@ public class ProjectService {
         User currentUser = getCurrentUser();
         ProjectNote note = projectNoteRepository.findByIdWithDetails(noteId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Note not found"));
-        projectAccessService.requireAccessibleProject(note.getProject().getId(), currentUser);
-
-        if (!projectAccessService.canManageNotes(currentUser) && !note.getCreatedBy().getId().equals(currentUser.getId())) {
-            throw new ResponseStatusException(FORBIDDEN, "You can only delete your own notes");
+        Project project = projectAccessService.requireAccessibleProject(note.getProject().getId(), currentUser);
+        if (!projectAccessService.canManageNotes(currentUser, project)) {
+            throw new ResponseStatusException(FORBIDDEN, "Only admins and the project manager can delete notes");
         }
         projectNoteRepository.delete(note);
     }
@@ -326,8 +350,40 @@ public class ProjectService {
                 payment.getAmount(),
                 payment.getPaidAt(),
                 payment.getReferenceNote(),
-                payment.getCreatedBy().getFullName()
+                payment.getCreatedBy().getFullName(),
+                payment.getAttachments().stream()
+                        .map(attachment -> new PaymentAttachmentResponse(
+                                attachment.getId(),
+                                attachment.getFileUrl(),
+                                attachment.getFileName(),
+                                attachment.getFileType()
+                        ))
+                        .toList()
         );
+    }
+
+    private void replacePaymentAttachments(
+            ProjectPayment payment,
+            List<PaymentAttachmentRequest> requestedAttachments
+    ) {
+        List<PaymentAttachmentRequest> attachments = requestedAttachments != null
+                ? requestedAttachments
+                : List.of();
+        for (PaymentAttachmentRequest attachment : attachments) {
+            if (!PAYMENT_ATTACHMENT_TYPES.contains(attachment.fileType())) {
+                throw new ResponseStatusException(BAD_REQUEST, "Payment bills must be PDF, JPG, or PNG files");
+            }
+        }
+
+        payment.getAttachments().clear();
+        for (PaymentAttachmentRequest request : attachments) {
+            ProjectPaymentAttachment attachment = new ProjectPaymentAttachment();
+            attachment.setPayment(payment);
+            attachment.setFileUrl(request.fileUrl().trim());
+            attachment.setFileName(request.fileName().trim());
+            attachment.setFileType(request.fileType());
+            payment.getAttachments().add(attachment);
+        }
     }
 
     private User getUserById(Long userId) {
@@ -393,7 +449,12 @@ public class ProjectService {
                 project.getManager().getFullName(),
                 project.getCreatedBy().getId(),
                 project.getAssignedEmployees().stream()
-                        .map(u -> new ProjectResponse.ProjectEmployeeResponse(u.getId(), u.getFullName()))
+                        .map(u -> new ProjectResponse.ProjectEmployeeResponse(
+                                u.getId(),
+                                u.getFullName(),
+                                Boolean.TRUE.equals(projectRepository.canMemberManageTasks(project.getId(), u.getId())),
+                                Boolean.TRUE.equals(projectRepository.canMemberAddNotes(project.getId(), u.getId()))
+                        ))
                         .toList(),
                 project.getClientNotes(),
                 includeFinancials ? project.getInternalNotes() : null,
@@ -407,5 +468,29 @@ public class ProjectService {
                 project.getCreatedAt(),
                 project.getUpdatedAt()
         );
+    }
+
+    private void applyMemberPermissions(
+            Long projectId,
+            Set<User> assignedEmployees,
+            List<ProjectMemberPermissionRequest> requestedPermissions
+    ) {
+        var permissionsByUserId = requestedPermissions == null
+                ? java.util.Map.<Long, ProjectMemberPermissionRequest>of()
+                : requestedPermissions.stream().collect(Collectors.toMap(
+                        ProjectMemberPermissionRequest::userId,
+                        permission -> permission,
+                        (first, second) -> second
+                ));
+
+        for (User employee : assignedEmployees) {
+            ProjectMemberPermissionRequest permission = permissionsByUserId.get(employee.getId());
+            projectRepository.updateMemberPermissions(
+                    projectId,
+                    employee.getId(),
+                    permission != null && permission.canManageTasks(),
+                    permission != null && permission.canAddNotes()
+            );
+        }
     }
 }

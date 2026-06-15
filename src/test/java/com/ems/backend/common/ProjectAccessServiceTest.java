@@ -91,6 +91,35 @@ class ProjectAccessServiceTest {
         assertThrows(ResponseStatusException.class, () -> projectAccessService.requireManageableProject(10L, employee));
     }
 
+    @Test
+    void delegatedEmployeeCanManageProjectTasks() {
+        when(projectRepository.canMemberManageTasks(10L, 3L)).thenReturn(true);
+
+        assertTrue(projectAccessService.canManageTasks(employee, project));
+    }
+
+    @Test
+    void ordinaryEmployeeCannotManageProjectTasks() {
+        when(projectRepository.canMemberManageTasks(10L, 3L)).thenReturn(false);
+
+        assertFalse(projectAccessService.canManageTasks(employee, project));
+    }
+
+    @Test
+    void delegatedEmployeeCanAddButNotManageNotes() {
+        when(projectRepository.canMemberAddNotes(10L, 3L)).thenReturn(true);
+
+        assertTrue(projectAccessService.canAddNotes(employee, project));
+        assertFalse(projectAccessService.canManageNotes(employee, project));
+        assertFalse(projectAccessService.canViewAdminOnlyNotes(employee, project));
+    }
+
+    @Test
+    void projectManagerCanManageAndViewAdminOnlyNotes() {
+        assertTrue(projectAccessService.canManageNotes(manager, project));
+        assertTrue(projectAccessService.canViewAdminOnlyNotes(manager, project));
+    }
+
     private static User user(Long id, Role role) {
         User user = new User();
         user.setId(id);

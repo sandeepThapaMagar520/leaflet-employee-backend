@@ -53,11 +53,9 @@ public class TaskService {
 
     public TaskResponse createTask(CreateTaskRequest request) {
         User currentUser = getCurrentUser();
-        Project project = projectAccessService.requireManageableProject(request.projectId(), currentUser);
+        Project project = projectAccessService.requireTaskManageableProject(request.projectId(), currentUser);
         User assignee = getUserById(request.assignedToId());
-        if (assignee.getRole() != Role.EMPLOYEE && assignee.getRole() != Role.MANAGER) {
-            throw new ResponseStatusException(BAD_REQUEST, "Task assignee must be EMPLOYEE or MANAGER");
-        }
+        requireProjectTeamMember(project, assignee);
 
         Task task = new Task();
         task.setTitle(request.title());
@@ -109,13 +107,11 @@ public class TaskService {
     public TaskResponse updateTask(Long taskId, UpdateTaskRequest request) {
         Task task = getTaskById(taskId);
         User currentUser = getCurrentUser();
-        projectAccessService.requireManageableProject(task.getProject().getId(), currentUser);
+        Project project = projectAccessService.requireTaskManageableProject(task.getProject().getId(), currentUser);
         User assignee = getUserById(request.assignedToId());
         Long previousAssigneeId = task.getAssignedTo().getId();
 
-        if (assignee.getRole() != Role.EMPLOYEE && assignee.getRole() != Role.MANAGER) {
-            throw new ResponseStatusException(BAD_REQUEST, "Task assignee must be EMPLOYEE or MANAGER");
-        }
+        requireProjectTeamMember(project, assignee);
 
         task.setTitle(request.title());
         task.setDescription(request.description());
@@ -169,7 +165,7 @@ public class TaskService {
     public void deleteTask(Long taskId) {
         Task task = getTaskById(taskId);
         User currentUser = getCurrentUser();
-        projectAccessService.requireManageableProject(task.getProject().getId(), currentUser);
+        projectAccessService.requireTaskManageableProject(task.getProject().getId(), currentUser);
         taskRepository.delete(task);
     }
 
@@ -221,6 +217,15 @@ public class TaskService {
 
     private User getCurrentUser() {
         return securityUtils.getCurrentUser();
+    }
+
+    private void requireProjectTeamMember(Project project, User assignee) {
+        boolean isProjectManager = project.getManager().getId().equals(assignee.getId());
+        boolean isAssignedEmployee = project.getAssignedEmployees().stream()
+                .anyMatch(employee -> employee.getId().equals(assignee.getId()));
+        if (!isProjectManager && !isAssignedEmployee) {
+            throw new ResponseStatusException(BAD_REQUEST, "Task assignee must be a member of this project team");
+        }
     }
 
     private TaskResponse map(Task task) {
