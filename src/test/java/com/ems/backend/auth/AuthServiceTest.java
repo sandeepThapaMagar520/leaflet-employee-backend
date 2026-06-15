@@ -4,6 +4,7 @@ import com.ems.backend.auth.dto.LoginRequest;
 import com.ems.backend.auth.dto.ChangePasswordRequest;
 import com.ems.backend.auth.dto.RequestEmailChange;
 import com.ems.backend.auth.dto.SetPasswordRequest;
+import com.ems.backend.auth.dto.StartAccountSetupRequest;
 import com.ems.backend.auth.dto.VerifyEmailChange;
 import com.ems.backend.auth.dto.VerifyPasswordOtpRequest;
 import com.ems.backend.common.SecurityUtils;
@@ -91,6 +92,50 @@ class AuthServiceTest {
 
         verify(passwordEncoder, never()).matches("password", "encoded");
         verify(jwtService, never()).generateToken(anyString(), anyString());
+    }
+
+    @Test
+    void startAccountSetupSendsOtpAfterTemporaryPasswordMatches() {
+        User user = activeUser();
+        user.setMustChangePassword(true);
+        when(userRepository.findByEmail("admin@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("temporary-password", "encoded")).thenReturn(true);
+        when(passwordEncoder.encode(anyString())).thenReturn("encoded-otp");
+
+        authService.startAccountSetup(
+                new StartAccountSetupRequest("admin@example.com", "temporary-password")
+        );
+
+        assertEquals("encoded-otp", user.getPasswordOtp());
+        assertNotNull(user.getPasswordOtpExpiresAt());
+        verify(emailService).sendPasswordOtp(eq("admin@example.com"), eq("Admin"), anyString(), eq(true));
+        verify(userRepository).save(user);
+    }
+
+    @Test
+    void startAccountSetupRejectsIncorrectTemporaryPassword() {
+        User user = activeUser();
+        user.setMustChangePassword(true);
+        when(userRepository.findByEmail("admin@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("wrong-password", "encoded")).thenReturn(false);
+
+        assertThrows(ResponseStatusException.class, () -> authService.startAccountSetup(
+                new StartAccountSetupRequest("admin@example.com", "wrong-password")
+        ));
+
+        verify(emailService, never()).sendPasswordOtp(anyString(), anyString(), anyString(), eq(true));
+    }
+
+    @Test
+    void forgotPasswordCannotBypassFirstTimeTemporaryPassword() {
+        User user = activeUser();
+        user.setMustChangePassword(true);
+        when(userRepository.findByEmail("admin@example.com")).thenReturn(Optional.of(user));
+
+        authService.requestPasswordReset(new com.ems.backend.auth.dto.PasswordResetRequest("admin@example.com"));
+
+        verify(emailService, never()).sendPasswordOtp(anyString(), anyString(), anyString(), eq(true));
+        verify(emailService, never()).sendPasswordOtp(anyString(), anyString(), anyString(), eq(false));
     }
 
     @Test

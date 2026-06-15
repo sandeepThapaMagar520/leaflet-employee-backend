@@ -41,7 +41,9 @@ public class UserService {
                 user.getFullName(),
                 user.getEmail(),
                 user.getRole(),
-                user.getActive()
+                user.getActive(),
+                user.getJobTitle(),
+                user.getProfilePhotoUrl()
         );
     }
 
@@ -58,6 +60,7 @@ public class UserService {
         user.setEmail(request.email());
         user.setRole(request.role());
         user.setActive(request.active());
+        user.setJobTitle(request.jobTitle() == null || request.jobTitle().isBlank() ? null : request.jobTitle().trim());
 
         User updatedUser = userRepository.save(user);
 
@@ -66,7 +69,9 @@ public class UserService {
                 updatedUser.getFullName(),
                 updatedUser.getEmail(),
                 updatedUser.getRole(),
-                updatedUser.getActive()
+                updatedUser.getActive(),
+                updatedUser.getJobTitle(),
+                updatedUser.getProfilePhotoUrl()
         );
     }
 

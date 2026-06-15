@@ -9,6 +9,7 @@ import com.ems.backend.auth.dto.RegisterRequest;
 import com.ems.backend.auth.dto.RequestEmailChange;
 import com.ems.backend.auth.dto.SetPasswordRequest;
 import com.ems.backend.auth.dto.StaffRegistrationResponse;
+import com.ems.backend.auth.dto.StartAccountSetupRequest;
 import com.ems.backend.auth.dto.VerifyEmailRequest;
 import com.ems.backend.auth.dto.VerifyEmailChange;
 import com.ems.backend.auth.dto.VerifyPasswordOtpRequest;
@@ -48,6 +49,15 @@ public class AuthController {
     @Operation(summary = "Login", description = "Returns a JWT access token and authenticated user details.")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
         return ResponseEntity.ok(authService.login(request));
+    }
+
+    @PostMapping("/start-account-setup")
+    @Operation(summary = "Start first-time account setup", description = "Validates the administrator-issued temporary password, then emails a setup OTP.")
+    public ResponseEntity<Map<String, String>> startAccountSetup(
+            @Valid @RequestBody StartAccountSetupRequest request
+    ) {
+        authService.startAccountSetup(request);
+        return ResponseEntity.ok(Map.of("message", "Temporary password accepted. A six-digit OTP was sent to your email."));
     }
 
     @PostMapping("/change-password")

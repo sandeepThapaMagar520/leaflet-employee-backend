@@ -1,6 +1,7 @@
 package com.ems.backend.mail;
 
 import com.ems.backend.config.MailProperties;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -29,6 +30,22 @@ class EmailServiceTest {
 
         assertTrue(emailService.sendEmailChangeOtp("employee@example.com", "Employee", "123456"));
         verify(httpClient).send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
+    }
+
+    @Test
+    void webhookPayloadIncludesHtmlAndPlainTextFallback() throws Exception {
+        EmailService emailService = new EmailService(mailProperties(), objectMapper, mock(HttpClient.class));
+
+        JsonNode payload = objectMapper.readTree(emailService.buildWebhookPayload(
+                "employee@example.com",
+                "Subject",
+                "Plain text",
+                "<strong>Formatted</strong>"
+        ));
+
+        assertTrue(payload.path("body").asText().contains("Plain text"));
+        assertTrue(payload.path("htmlBody").asText().contains("<strong>Formatted</strong>"));
+        assertTrue(payload.path("fromName").asText().contains("Leaflet EMS"));
     }
 
     private MailProperties mailProperties() {
