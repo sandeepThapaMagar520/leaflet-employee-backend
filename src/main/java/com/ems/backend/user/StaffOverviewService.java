@@ -120,9 +120,9 @@ public class StaffOverviewService {
                 projects.size(),
                 (int) projects.stream().filter(project -> project.status() == ProjectStatus.ACTIVE).count(),
                 tasks.size(),
-                (int) tasks.stream().filter(task -> task.status() == TaskStatus.DONE).count(),
+                (int) tasks.stream().filter(task -> TaskStatus.DONE.name().equals(task.status())).count(),
                 (int) tasks.stream()
-                        .filter(task -> task.status() != TaskStatus.DONE)
+                        .filter(task -> !TaskStatus.DONE.name().equals(task.status()))
                         .filter(task -> task.dueDate() != null && task.dueDate().isBefore(today))
                         .count(),
                 recentHours,

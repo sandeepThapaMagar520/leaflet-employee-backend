@@ -8,5 +8,5 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     List<Task> findByProjectId(Long projectId);
     List<Task> findByAssignedToEmailIgnoreCase(String email);
     List<Task> findByProjectManagerId(Long managerId);
-    List<Task> findByStatusNotAndDueDateIsNotNull(TaskStatus status);
+    List<Task> findByStatusNotAndDueDateIsNotNull(String status);
 }

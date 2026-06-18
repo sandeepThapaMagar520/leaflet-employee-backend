@@ -18,6 +18,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -39,6 +40,7 @@ public class ProjectService {
     private final ProjectPaymentRepository projectPaymentRepository;
     private final ProjectNoteRepository projectNoteRepository;
     private final ProjectMilestoneRepository projectMilestoneRepository;
+    private final ProjectTaskBoardRepository projectTaskBoardRepository;
     private final SecurityUtils securityUtils;
     private final ProjectAccessService projectAccessService;
     private final NotificationService notificationService;
@@ -50,6 +52,7 @@ public class ProjectService {
             ProjectPaymentRepository projectPaymentRepository,
             ProjectNoteRepository projectNoteRepository,
             ProjectMilestoneRepository projectMilestoneRepository,
+            ProjectTaskBoardRepository projectTaskBoardRepository,
             SecurityUtils securityUtils,
             ProjectAccessService projectAccessService,
             NotificationService notificationService
@@ -60,6 +63,7 @@ public class ProjectService {
         this.projectPaymentRepository = projectPaymentRepository;
         this.projectNoteRepository = projectNoteRepository;
         this.projectMilestoneRepository = projectMilestoneRepository;
+        this.projectTaskBoardRepository = projectTaskBoardRepository;
         this.securityUtils = securityUtils;
         this.projectAccessService = projectAccessService;
         this.notificationService = notificationService;
@@ -90,6 +94,7 @@ public class ProjectService {
         project.setInternalNotes(request.internalNotes());
 
         Project saved = projectRepository.save(project);
+        createDefaultTaskBoards(saved);
 
         if (request.assignedEmployeeIds() != null) {
             Set<User> employees = request.assignedEmployeeIds().stream()
@@ -178,6 +183,72 @@ public class ProjectService {
         User currentUser = getCurrentUser();
         projectAccessService.requireManageableProject(projectId, currentUser);
         projectRepository.deleteById(projectId);
+    }
+
+    public List<ProjectTaskBoardResponse> listTaskBoards(Long projectId) {
+        User currentUser = getCurrentUser();
+        projectAccessService.requireAccessibleProject(projectId, currentUser);
+        ensureDefaultTaskBoards(projectId);
+        return projectTaskBoardRepository.findByProjectIdOrderByDisplayOrderAscIdAsc(projectId)
+                .stream()
+                .map(this::mapTaskBoard)
+                .toList();
+    }
+
+    public ProjectTaskBoardResponse createTaskBoard(Long projectId, CreateProjectTaskBoardRequest request) {
+        User currentUser = getCurrentUser();
+        Project project = projectAccessService.requireManageableProject(projectId, currentUser);
+        ensureDefaultTaskBoards(projectId);
+
+        String name = request.name().trim();
+        if (name.isBlank()) {
+            throw new ResponseStatusException(BAD_REQUEST, "Board name is required");
+        }
+        if (projectTaskBoardRepository.existsByProjectIdAndNameIgnoreCase(projectId, name)) {
+            throw new ResponseStatusException(BAD_REQUEST, "A board with this name already exists");
+        }
+
+        String baseKey = slugStatusKey(name);
+        String statusKey = baseKey;
+        int suffix = 2;
+        while (projectTaskBoardRepository.existsByProjectIdAndStatusKey(projectId, statusKey)) {
+            statusKey = baseKey + "_" + suffix++;
+        }
+
+        ProjectTaskBoard board = new ProjectTaskBoard();
+        board.setProject(project);
+        board.setName(name);
+        board.setStatusKey(statusKey);
+        board.setDisplayOrder((projectTaskBoardRepository.countByProjectId(projectId) + 1) * 10);
+        board.setDefaultBoard(false);
+        board.setTerminal(false);
+        return mapTaskBoard(projectTaskBoardRepository.save(board));
+    }
+
+    public List<ProjectTaskBoardResponse> reorderTaskBoards(Long projectId, ReorderProjectTaskBoardsRequest request) {
+        User currentUser = getCurrentUser();
+        projectAccessService.requireManageableProject(projectId, currentUser);
+        ensureDefaultTaskBoards(projectId);
+
+        List<ProjectTaskBoard> boards = projectTaskBoardRepository.findByProjectIdOrderByDisplayOrderAscIdAsc(projectId);
+        List<Long> currentIds = boards.stream().map(ProjectTaskBoard::getId).toList();
+        if (request.boardIds().size() != boards.size() || !request.boardIds().containsAll(currentIds)) {
+            throw new ResponseStatusException(BAD_REQUEST, "Board order must include every board in this project");
+        }
+
+        for (int i = 0; i < request.boardIds().size(); i++) {
+            Long boardId = request.boardIds().get(i);
+            ProjectTaskBoard board = boards.stream()
+                    .filter(item -> item.getId().equals(boardId))
+                    .findFirst()
+                    .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "Invalid board order"));
+            board.setDisplayOrder((i + 1) * 10);
+        }
+        projectTaskBoardRepository.saveAll(boards);
+        return projectTaskBoardRepository.findByProjectIdOrderByDisplayOrderAscIdAsc(projectId)
+                .stream()
+                .map(this::mapTaskBoard)
+                .toList();
     }
 
     public List<PaymentResponse> listPayments(Long projectId) {
@@ -422,7 +493,7 @@ public class ProjectService {
         List<Task> tasks = taskRepository.findByProjectId(project.getId());
         int progress = 0;
         if (!tasks.isEmpty()) {
-            long doneCount = tasks.stream().filter(t -> t.getStatus() == TaskStatus.DONE).count();
+            long doneCount = tasks.stream().filter(t -> TaskStatus.DONE.name().equals(t.getStatus())).count();
             progress = (int) Math.round((double) doneCount / tasks.size() * 100);
         }
 
@@ -467,6 +538,61 @@ public class ProjectService {
                 progress,
                 project.getCreatedAt(),
                 project.getUpdatedAt()
+        );
+    }
+
+    private void ensureDefaultTaskBoards(Long projectId) {
+        if (projectTaskBoardRepository.countByProjectId(projectId) > 0) {
+            return;
+        }
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Project not found"));
+        createDefaultTaskBoards(project);
+    }
+
+    private void createDefaultTaskBoards(Project project) {
+        if (projectTaskBoardRepository.existsByProjectIdAndStatusKey(project.getId(), TaskStatus.TODO.name())) {
+            return;
+        }
+        createDefaultTaskBoard(project, TaskStatus.TODO.name(), "To Do", 10, false);
+        createDefaultTaskBoard(project, TaskStatus.IN_PROGRESS.name(), "In Progress", 20, false);
+        createDefaultTaskBoard(project, TaskStatus.BLOCKED.name(), "Blocked", 30, false);
+        createDefaultTaskBoard(project, TaskStatus.DONE.name(), "Done", 40, true);
+    }
+
+    private void createDefaultTaskBoard(Project project, String statusKey, String name, int displayOrder, boolean terminal) {
+        ProjectTaskBoard board = new ProjectTaskBoard();
+        board.setProject(project);
+        board.setStatusKey(statusKey);
+        board.setName(name);
+        board.setDisplayOrder(displayOrder);
+        board.setDefaultBoard(true);
+        board.setTerminal(terminal);
+        projectTaskBoardRepository.save(board);
+    }
+
+    private String slugStatusKey(String name) {
+        String slug = name.trim().toUpperCase(Locale.ROOT)
+                .replaceAll("[^A-Z0-9]+", "_")
+                .replaceAll("^_+|_+$", "");
+        if (slug.isBlank()) {
+            slug = "BOARD";
+        }
+        if (!slug.startsWith("CUSTOM_")) {
+            slug = "CUSTOM_" + slug;
+        }
+        return slug.length() > 80 ? slug.substring(0, 80).replaceAll("_+$", "") : slug;
+    }
+
+    private ProjectTaskBoardResponse mapTaskBoard(ProjectTaskBoard board) {
+        return new ProjectTaskBoardResponse(
+                board.getId(),
+                board.getProject().getId(),
+                board.getStatusKey(),
+                board.getName(),
+                board.getDisplayOrder(),
+                board.isDefaultBoard(),
+                board.isTerminal()
         );
     }
 

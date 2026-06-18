@@ -1,9 +1,8 @@
 package com.ems.backend.task.dto;
 
-import com.ems.backend.task.TaskStatus;
-import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.NotBlank;
 
 public record UpdateTaskStatusRequest(
-        @NotNull TaskStatus status
+        @NotBlank String status
 ) {
 }

@@ -24,9 +24,8 @@ public class Task {
     @Column(columnDefinition = "TEXT")
     private String description;
 
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private TaskStatus status;
+    @Column(nullable = false, length = 80)
+    private String status;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

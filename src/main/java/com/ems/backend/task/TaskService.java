@@ -6,6 +6,7 @@ import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.notification.NotificationService;
 import com.ems.backend.notification.NotificationType;
 import com.ems.backend.project.Project;
+import com.ems.backend.project.ProjectTaskBoardRepository;
 import com.ems.backend.task.dto.CreateTaskRequest;
 import com.ems.backend.task.dto.CreateTaskCommentRequest;
 import com.ems.backend.task.dto.TaskCommentResponse;
@@ -19,7 +20,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.FORBIDDEN;
@@ -34,6 +37,7 @@ public class TaskService {
     private final SecurityUtils securityUtils;
     private final ProjectAccessService projectAccessService;
     private final NotificationService notificationService;
+    private final ProjectTaskBoardRepository projectTaskBoardRepository;
 
     public TaskService(
             TaskRepository taskRepository,
@@ -41,7 +45,8 @@ public class TaskService {
             UserRepository userRepository,
             SecurityUtils securityUtils,
             ProjectAccessService projectAccessService,
-            NotificationService notificationService
+            NotificationService notificationService,
+            ProjectTaskBoardRepository projectTaskBoardRepository
     ) {
         this.taskRepository = taskRepository;
         this.taskCommentRepository = taskCommentRepository;
@@ -49,6 +54,7 @@ public class TaskService {
         this.securityUtils = securityUtils;
         this.projectAccessService = projectAccessService;
         this.notificationService = notificationService;
+        this.projectTaskBoardRepository = projectTaskBoardRepository;
     }
 
     public TaskResponse createTask(CreateTaskRequest request) {
@@ -60,7 +66,8 @@ public class TaskService {
         Task task = new Task();
         task.setTitle(request.title());
         task.setDescription(request.description());
-        task.setStatus(TaskStatus.TODO);
+        requireProjectBoard(project, TaskStatus.TODO.name());
+        task.setStatus(TaskStatus.TODO.name());
         task.setPriority(request.priority());
         task.setDueDate(request.dueDate());
         task.setProject(project);
@@ -115,6 +122,7 @@ public class TaskService {
 
         task.setTitle(request.title());
         task.setDescription(request.description());
+        requireProjectBoard(project, request.status());
         task.setStatus(request.status());
         task.setPriority(request.priority());
         task.setDueDate(request.dueDate());
@@ -136,20 +144,18 @@ public class TaskService {
     public TaskResponse updateTaskStatus(Long taskId, UpdateTaskStatusRequest request) {
         Task task = getTaskById(taskId);
         User currentUser = getCurrentUser();
-        if (currentUser.getRole() == Role.ADMIN) {
-            throw new ResponseStatusException(FORBIDDEN, "Admins can add and manage tasks but cannot submit task status updates.");
-        }
         projectAccessService.requireAccessibleProject(task.getProject().getId(), currentUser);
 
         if (currentUser.getRole() == Role.EMPLOYEE && !task.getAssignedTo().getId().equals(currentUser.getId())) {
             throw new ResponseStatusException(FORBIDDEN, "Employees can update only their own tasks");
         }
 
-        TaskStatus previousStatus = task.getStatus();
+        requireProjectBoard(task.getProject(), request.status());
+        String previousStatus = task.getStatus();
         task.setStatus(request.status());
         Task saved = taskRepository.save(task);
 
-        if (previousStatus != TaskStatus.DONE && saved.getStatus() == TaskStatus.DONE
+        if (!TaskStatus.DONE.name().equals(previousStatus) && TaskStatus.DONE.name().equals(saved.getStatus())
                 && !saved.getCreatedBy().getId().equals(currentUser.getId())) {
             notificationService.notifyUser(
                     saved.getCreatedBy(),
@@ -192,7 +198,20 @@ public class TaskService {
         comment.setAttachmentName(request.attachmentName());
         TaskComment saved = taskCommentRepository.save(comment);
 
-        if (!task.getAssignedTo().getId().equals(currentUser.getId())) {
+        Set<User> mentionedUsers = resolveMentionedUsers(task.getProject(), request.mentionedUserIds(), currentUser);
+        for (User mentionedUser : mentionedUsers) {
+            notificationService.notifyUser(
+                    mentionedUser,
+                    NotificationType.TASK_COMMENTED,
+                    "You were mentioned",
+                    currentUser.getFullName() + " mentioned you on \"" + task.getTitle() + "\"",
+                    "/projects/" + task.getProject().getId()
+            );
+        }
+
+        boolean assigneeAlreadyMentioned = mentionedUsers.stream()
+                .anyMatch(user -> user.getId().equals(task.getAssignedTo().getId()));
+        if (!assigneeAlreadyMentioned && !task.getAssignedTo().getId().equals(currentUser.getId())) {
             notificationService.notifyUser(
                     task.getAssignedTo(),
                     NotificationType.TASK_COMMENTED,
@@ -226,6 +245,32 @@ public class TaskService {
         if (!isProjectManager && !isAssignedEmployee) {
             throw new ResponseStatusException(BAD_REQUEST, "Task assignee must be a member of this project team");
         }
+    }
+
+    private void requireProjectBoard(Project project, String status) {
+        String statusKey = status == null ? "" : status.trim();
+        if (statusKey.isBlank()) {
+            throw new ResponseStatusException(BAD_REQUEST, "Task board is required");
+        }
+        if (!projectTaskBoardRepository.existsByProjectIdAndStatusKey(project.getId(), statusKey)) {
+            throw new ResponseStatusException(BAD_REQUEST, "Task board does not exist for this project");
+        }
+    }
+
+    private Set<User> resolveMentionedUsers(Project project, List<Long> mentionedUserIds, User currentUser) {
+        if (mentionedUserIds == null || mentionedUserIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> uniqueIds = new LinkedHashSet<>(mentionedUserIds);
+        uniqueIds.remove(currentUser.getId());
+
+        Set<User> mentionedUsers = new LinkedHashSet<>();
+        for (Long userId : uniqueIds) {
+            User user = getUserById(userId);
+            requireProjectTeamMember(project, user);
+            mentionedUsers.add(user);
+        }
+        return mentionedUsers;
     }
 
     private TaskResponse map(Task task) {

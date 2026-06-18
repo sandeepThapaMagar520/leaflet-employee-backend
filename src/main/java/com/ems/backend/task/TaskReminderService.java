@@ -22,7 +22,7 @@ public class TaskReminderService {
         LocalDate today = LocalDate.now();
         LocalDate tomorrow = today.plusDays(1);
 
-        for (Task task : taskRepository.findByStatusNotAndDueDateIsNotNull(TaskStatus.DONE)) {
+        for (Task task : taskRepository.findByStatusNotAndDueDateIsNotNull(TaskStatus.DONE.name())) {
             if (task.getDueDate().isBefore(today)) {
                 notificationService.notifyUser(
                         task.getAssignedTo(),

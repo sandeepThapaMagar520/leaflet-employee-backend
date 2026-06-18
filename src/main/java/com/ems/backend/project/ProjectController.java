@@ -67,6 +67,33 @@ public class ProjectController {
         projectService.deleteProject(projectId);
     }
 
+    @GetMapping("/{projectId}/task-boards")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "List project task boards", description = "Returns default and custom Kanban boards for a project.")
+    public List<ProjectTaskBoardResponse> listTaskBoards(@PathVariable Long projectId) {
+        return projectService.listTaskBoards(projectId);
+    }
+
+    @PostMapping("/{projectId}/task-boards")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @Operation(summary = "Create project task board", description = "Admins and project managers can add custom Kanban boards for project tasks.")
+    public ProjectTaskBoardResponse createTaskBoard(
+            @PathVariable Long projectId,
+            @Valid @RequestBody CreateProjectTaskBoardRequest request
+    ) {
+        return projectService.createTaskBoard(projectId, request);
+    }
+
+    @PutMapping("/{projectId}/task-boards/order")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @Operation(summary = "Reorder project task boards", description = "Admins and project managers can move Kanban boards left or right.")
+    public List<ProjectTaskBoardResponse> reorderTaskBoards(
+            @PathVariable Long projectId,
+            @Valid @RequestBody ReorderProjectTaskBoardsRequest request
+    ) {
+        return projectService.reorderTaskBoards(projectId, request);
+    }
+
     @GetMapping("/{projectId}/payments")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "List project payments")
