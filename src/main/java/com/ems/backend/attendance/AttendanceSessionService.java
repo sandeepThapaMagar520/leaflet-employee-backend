@@ -91,7 +91,10 @@ public class AttendanceSessionService {
     }
 
     public List<AttendanceSessionResponse> getAllSessions() {
-        return repository.findAllByOrderByStartTimeDesc().stream().map(this::map).toList();
+        return repository.findAllByOrderByStartTimeDesc().stream()
+                .filter(session -> session.getUser().getRole() != Role.ADMIN)
+                .map(this::map)
+                .toList();
     }
 
     public AttendanceDaySummaryResponse getMyTodaySummary() {
@@ -112,6 +115,7 @@ public class AttendanceSessionService {
 
         return userRepository.findAll().stream()
                 .filter(user -> Boolean.TRUE.equals(user.getActive()))
+                .filter(user -> user.getRole() != Role.ADMIN)
                 .sorted(Comparator.comparing(User::getFullName, String.CASE_INSENSITIVE_ORDER))
                 .map(user -> buildSummary(user, workDate, sessionsByUser.getOrDefault(user.getId(), List.of()), now))
                 .toList();

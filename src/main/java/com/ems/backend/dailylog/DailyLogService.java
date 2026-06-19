@@ -52,7 +52,10 @@ public class DailyLogService {
     }
 
     public List<DailyLogResponse> getAllLogs() {
-        return repository.findAllByOrderByLogDateDesc().stream().map(this::map).toList();
+        return repository.findAllByOrderByLogDateDesc().stream()
+                .filter(log -> log.getUser().getRole() != Role.ADMIN)
+                .map(this::map)
+                .toList();
     }
 
     public DailyLogResponse updateLog(Long logId, UpdateDailyLogRequest request) {

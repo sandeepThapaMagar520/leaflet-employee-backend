@@ -61,6 +61,7 @@ public class TaskService {
         User currentUser = getCurrentUser();
         Project project = projectAccessService.requireTaskManageableProject(request.projectId(), currentUser);
         User assignee = getUserById(request.assignedToId());
+        requireAssignableTaskUser(assignee);
         requireProjectTeamMember(project, assignee);
 
         Task task = new Task();
@@ -118,6 +119,7 @@ public class TaskService {
         User assignee = getUserById(request.assignedToId());
         Long previousAssigneeId = task.getAssignedTo().getId();
 
+        requireAssignableTaskUser(assignee);
         requireProjectTeamMember(project, assignee);
 
         task.setTitle(request.title());
@@ -244,6 +246,12 @@ public class TaskService {
                 .anyMatch(employee -> employee.getId().equals(assignee.getId()));
         if (!isProjectManager && !isAssignedEmployee) {
             throw new ResponseStatusException(BAD_REQUEST, "Task assignee must be a member of this project team");
+        }
+    }
+
+    private void requireAssignableTaskUser(User assignee) {
+        if (assignee.getRole() == Role.ADMIN) {
+            throw new ResponseStatusException(BAD_REQUEST, "Tasks can be assigned only to employees or managers");
         }
     }
 
