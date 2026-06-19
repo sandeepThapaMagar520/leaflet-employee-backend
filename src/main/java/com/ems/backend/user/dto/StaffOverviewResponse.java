@@ -18,7 +18,9 @@ public record StaffOverviewResponse(
         List<TaskResponse> tasks,
         List<AttendanceSessionResponse> attendanceSessions,
         List<LeaveRequestResponse> leaveRequests,
-        List<DailyLogResponse> dailyLogs
+        List<DailyLogResponse> dailyLogs,
+        List<StaffDocumentResponse> documents,
+        List<StaffAuditEventResponse> auditEvents
 ) {
     public record Summary(
             int projectCount,

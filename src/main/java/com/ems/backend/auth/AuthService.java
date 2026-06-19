@@ -16,6 +16,10 @@ import com.ems.backend.mail.EmailService;
 import com.ems.backend.security.JwtService;
 import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.user.User;
+import com.ems.backend.user.EmploymentType;
+import com.ems.backend.user.StaffAuditAction;
+import com.ems.backend.user.StaffAuditEvent;
+import com.ems.backend.user.StaffAuditEventRepository;
 import com.ems.backend.user.UserProfileService;
 import com.ems.backend.user.UserRepository;
 import org.springframework.http.HttpStatus;
@@ -39,6 +43,7 @@ public class AuthService {
     private final SecurityUtils securityUtils;
     private final UserProfileService userProfileService;
     private final EmailService emailService;
+    private final StaffAuditEventRepository staffAuditEventRepository;
 
     public AuthService(
             UserRepository userRepository,
@@ -47,7 +52,8 @@ public class AuthService {
             LoginRateLimiter loginRateLimiter,
             SecurityUtils securityUtils,
             UserProfileService userProfileService,
-            EmailService emailService
+            EmailService emailService,
+            StaffAuditEventRepository staffAuditEventRepository
     ) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
@@ -56,6 +62,7 @@ public class AuthService {
         this.securityUtils = securityUtils;
         this.userProfileService = userProfileService;
         this.emailService = emailService;
+        this.staffAuditEventRepository = staffAuditEventRepository;
     }
 
     public StaffRegistrationResponse register(RegisterRequest request) {
@@ -70,11 +77,19 @@ public class AuthService {
         user.setPassword(passwordEncoder.encode(request.temporaryPassword()));
         user.setRole(request.role());
         user.setJobTitle(request.jobTitle().trim());
+        user.setEmployeeId(normalize(request.employeeId()));
+        user.setJoiningDate(request.joiningDate());
+        user.setEmploymentType(request.employmentType() == null ? EmploymentType.FULL_TIME : request.employmentType());
+        user.setPhone(normalize(request.phone()));
+        user.setEmergencyContact(normalize(request.emergencyContact()));
+        user.setDepartment(normalize(request.department()));
+        user.setLocation(normalize(request.location()));
         user.setMustChangePassword(true);
         user.setEmailVerified(false);
 
         User saved = userRepository.save(user);
         userProfileService.getOrCreateSettings(saved);
+        auditRegistration(saved);
         emailService.sendTemporaryPassword(
                 saved.getEmail(),
                 saved.getFullName(),
@@ -264,6 +279,25 @@ public class AuthService {
 
     private String generateOtp() {
         return "%06d".formatted(SECURE_RANDOM.nextInt(1_000_000));
+    }
+
+    private String normalize(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private void auditRegistration(User saved) {
+        User actor = null;
+        try {
+            actor = securityUtils.getCurrentUser();
+        } catch (RuntimeException ignored) {
+            // Registration can be called in contexts where no authenticated actor is available.
+        }
+        StaffAuditEvent event = new StaffAuditEvent();
+        event.setStaffUser(saved);
+        event.setActor(actor);
+        event.setAction(StaffAuditAction.REGISTERED);
+        event.setDescription("Registered staff account and sent first-time setup invite.");
+        staffAuditEventRepository.save(event);
     }
 
     private AuthResponse buildAuthResponse(User user) {

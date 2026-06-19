@@ -4,6 +4,9 @@ import com.ems.backend.attendance.AttendanceSessionService;
 import com.ems.backend.attendance.dto.AttendanceSessionResponse;
 import com.ems.backend.dailylog.DailyLogService;
 import com.ems.backend.dailylog.dto.DailyLogResponse;
+import com.ems.backend.user.StaffOverviewService;
+import com.ems.backend.user.dto.StaffOverviewResponse;
+import com.ems.backend.task.dto.TaskResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpHeaders;
@@ -28,10 +31,46 @@ public class ExportController {
 
     private final AttendanceSessionService attendanceSessionService;
     private final DailyLogService dailyLogService;
+    private final StaffOverviewService staffOverviewService;
 
-    public ExportController(AttendanceSessionService attendanceSessionService, DailyLogService dailyLogService) {
+    public ExportController(
+            AttendanceSessionService attendanceSessionService,
+            DailyLogService dailyLogService,
+            StaffOverviewService staffOverviewService
+    ) {
         this.attendanceSessionService = attendanceSessionService;
         this.dailyLogService = dailyLogService;
+        this.staffOverviewService = staffOverviewService;
+    }
+
+    @GetMapping("/staff/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Export staff record CSV", description = "Exports one staff member's profile, workload, and record counts.")
+    public ResponseEntity<byte[]> exportStaffRecord(@PathVariable Long id) {
+        StaffOverviewResponse record = staffOverviewService.getOverview(id);
+        StringBuilder csv = new StringBuilder("Section,Field,Value\n");
+        csv.append(csvRow("Profile", "Name", record.staff().fullName()));
+        csv.append(csvRow("Profile", "Email", record.staff().email()));
+        csv.append(csvRow("Profile", "Employee ID", record.staff().employeeId()));
+        csv.append(csvRow("Profile", "Role", record.staff().role().name()));
+        csv.append(csvRow("Profile", "Account status", record.staff().accountStatus().name()));
+        csv.append(csvRow("Profile", "Employment type", record.staff().employmentType().name()));
+        csv.append(csvRow("Profile", "Joining date", record.staff().joiningDate() != null ? record.staff().joiningDate().toString() : ""));
+        csv.append(csvRow("Profile", "Phone", record.staff().phone()));
+        csv.append(csvRow("Profile", "Emergency contact", record.staff().emergencyContact()));
+        csv.append(csvRow("Profile", "Location", record.staff().location()));
+        csv.append(csvRow("Workload", "Active projects", String.valueOf(record.summary().activeProjectCount())));
+        csv.append(csvRow("Workload", "Total tasks", String.valueOf(record.summary().taskCount())));
+        csv.append(csvRow("Workload", "Completed tasks", String.valueOf(record.summary().completedTaskCount())));
+        csv.append(csvRow("Workload", "Overdue tasks", String.valueOf(record.summary().overdueTaskCount())));
+        csv.append(csvRow("Records", "Attendance sessions", String.valueOf(record.attendanceSessions().size())));
+        csv.append(csvRow("Records", "Leave requests", String.valueOf(record.leaveRequests().size())));
+        csv.append(csvRow("Records", "DSU submissions", String.valueOf(record.dailyLogs().size())));
+        csv.append(csvRow("Records", "Documents", String.valueOf(record.documents().size())));
+        for (TaskResponse task : record.tasks()) {
+            csv.append(csvRow("Task", task.title(), task.projectName() + " · " + task.status()));
+        }
+        return csvAttachment("staff-record-" + id + ".csv", csv.toString());
     }
 
     @GetMapping("/attendance")
@@ -90,6 +129,10 @@ public class ExportController {
             return "\"\"";
         }
         return "\"" + value.replace("\"", "\"\"") + "\"";
+    }
+
+    private static String csvRow(String section, String field, String value) {
+        return csvCell(section) + "," + csvCell(field) + "," + csvCell(value) + "\n";
     }
 
     private static boolean isWithinRange(LocalDate date, LocalDate from, LocalDate to) {

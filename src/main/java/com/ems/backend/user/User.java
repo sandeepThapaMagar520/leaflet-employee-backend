@@ -12,6 +12,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 @Getter
 @Setter
@@ -46,7 +47,22 @@ public class User {
     @Column(name = "job_title")
     private String jobTitle;
 
+    @Column(name = "employee_id")
+    private String employeeId;
+
+    @Column(name = "joining_date")
+    private LocalDate joiningDate;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "employment_type", nullable = false)
+    private EmploymentType employmentType = EmploymentType.FULL_TIME;
+
     private String department;
+
+    private String location;
+
+    @Column(name = "emergency_contact")
+    private String emergencyContact;
 
     @Column(nullable = false)
     private String timezone = "Asia/Kathmandu";

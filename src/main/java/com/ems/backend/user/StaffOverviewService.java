@@ -14,7 +14,7 @@ import com.ems.backend.task.TaskService;
 import com.ems.backend.task.TaskStatus;
 import com.ems.backend.task.dto.TaskResponse;
 import com.ems.backend.user.dto.StaffOverviewResponse;
-import com.ems.backend.user.dto.UserResponse;
+import com.ems.backend.user.dto.StaffAuditEventResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -34,6 +34,9 @@ public class StaffOverviewService {
     private final AttendanceSessionService attendanceSessionService;
     private final LeaveRequestService leaveRequestService;
     private final DailyLogService dailyLogService;
+    private final StaffDocumentRepository staffDocumentRepository;
+    private final StaffAuditEventRepository staffAuditEventRepository;
+    private final UserService userService;
 
     public StaffOverviewService(
             UserRepository userRepository,
@@ -41,7 +44,10 @@ public class StaffOverviewService {
             TaskService taskService,
             AttendanceSessionService attendanceSessionService,
             LeaveRequestService leaveRequestService,
-            DailyLogService dailyLogService
+            DailyLogService dailyLogService,
+            StaffDocumentRepository staffDocumentRepository,
+            StaffAuditEventRepository staffAuditEventRepository,
+            UserService userService
     ) {
         this.userRepository = userRepository;
         this.projectService = projectService;
@@ -49,6 +55,9 @@ public class StaffOverviewService {
         this.attendanceSessionService = attendanceSessionService;
         this.leaveRequestService = leaveRequestService;
         this.dailyLogService = dailyLogService;
+        this.staffDocumentRepository = staffDocumentRepository;
+        this.staffAuditEventRepository = staffAuditEventRepository;
+        this.userService = userService;
     }
 
     public StaffOverviewResponse getOverview(Long userId) {
@@ -73,13 +82,25 @@ public class StaffOverviewService {
                 .toList();
 
         return new StaffOverviewResponse(
-                mapUser(user),
+                userService.map(user),
                 buildSummary(projects, tasks, attendance, leaveRequests, dailyLogs),
                 projects,
                 tasks,
                 attendance,
                 leaveRequests,
-                dailyLogs
+                dailyLogs,
+                staffDocumentRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
+                        .map(userService::mapDocument)
+                        .toList(),
+                staffAuditEventRepository.findByStaffUserIdOrderByCreatedAtDesc(userId).stream()
+                        .map(event -> new StaffAuditEventResponse(
+                                event.getId(),
+                                event.getAction(),
+                                event.getDescription(),
+                                event.getActor() != null ? event.getActor().getFullName() : "System",
+                                event.getCreatedAt()
+                        ))
+                        .toList()
         );
     }
 
@@ -135,15 +156,4 @@ public class StaffOverviewService {
         );
     }
 
-    private UserResponse mapUser(User user) {
-        return new UserResponse(
-                user.getId(),
-                user.getFullName(),
-                user.getEmail(),
-                user.getRole(),
-                user.getActive(),
-                user.getJobTitle(),
-                user.getProfilePhotoUrl()
-        );
-    }
 }

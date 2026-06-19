@@ -3,6 +3,8 @@ package com.ems.backend.user;
 import com.ems.backend.common.PageResponse;
 import com.ems.backend.user.dto.UserResponse;
 import com.ems.backend.user.dto.StaffOverviewResponse;
+import com.ems.backend.user.dto.CreateStaffDocumentRequest;
+import com.ems.backend.user.dto.StaffDocumentResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
@@ -11,6 +13,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -92,6 +95,24 @@ public class UserController {
     @Operation(summary = "Staff overview", description = "Admin-only operational record for one staff member.")
     public StaffOverviewResponse getStaffOverview(@PathVariable Long id) {
         return staffOverviewService.getOverview(id);
+    }
+
+    @PostMapping("/{id}/documents")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Add staff document", description = "Stores staff document metadata after upload.")
+    public StaffDocumentResponse addStaffDocument(
+            @PathVariable Long id,
+            @Valid @RequestBody CreateStaffDocumentRequest request
+    ) {
+        return userService.addDocument(id, request);
+    }
+
+    @DeleteMapping("/{id}/documents/{documentId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Delete staff document", description = "Removes staff document metadata from a staff record.")
+    public void deleteStaffDocument(@PathVariable Long id, @PathVariable Long documentId) {
+        userService.deleteDocument(id, documentId);
     }
 
     @PutMapping("/{id}")
