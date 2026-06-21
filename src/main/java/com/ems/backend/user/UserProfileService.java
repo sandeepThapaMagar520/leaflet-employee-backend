@@ -51,6 +51,12 @@ public class UserProfileService {
         if (request.phone() != null) {
             user.setPhone(request.phone().isBlank() ? null : request.phone().trim());
         }
+        if (request.emergencyContact() != null) {
+            user.setEmergencyContact(request.emergencyContact().isBlank() ? null : request.emergencyContact().trim());
+        }
+        if (request.location() != null) {
+            user.setLocation(request.location().isBlank() ? null : request.location().trim());
+        }
         if (request.timezone() != null && !request.timezone().isBlank()) {
             user.setTimezone(request.timezone().trim());
         }
@@ -145,9 +151,14 @@ public class UserProfileService {
                 user.getRole(),
                 user.getActive(),
                 user.getProfilePhotoUrl(),
+                user.getEmployeeId(),
+                user.getJoiningDate(),
+                user.getEmploymentType(),
                 user.getPhone(),
+                user.getEmergencyContact(),
                 user.getJobTitle(),
                 user.getDepartment(),
+                user.getLocation(),
                 user.getTimezone(),
                 user.getEmailVerified(),
                 user.getMustChangePassword(),

@@ -1,8 +1,10 @@
 package com.ems.backend.user.dto;
 
 import com.ems.backend.user.Role;
+import com.ems.backend.user.EmploymentType;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 public record ProfileResponse(
         Long id,
@@ -11,9 +13,14 @@ public record ProfileResponse(
         Role role,
         Boolean active,
         String profilePhotoUrl,
+        String employeeId,
+        LocalDate joiningDate,
+        EmploymentType employmentType,
         String phone,
+        String emergencyContact,
         String jobTitle,
         String department,
+        String location,
         String timezone,
         Boolean emailVerified,
         Boolean mustChangePassword,
