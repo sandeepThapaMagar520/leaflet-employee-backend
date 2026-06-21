@@ -4,6 +4,7 @@ import com.ems.backend.common.PageResponse;
 import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.user.dto.CreateStaffDocumentRequest;
 import com.ems.backend.user.dto.StaffDocumentResponse;
+import com.ems.backend.user.dto.StaffDirectorySummaryResponse;
 import com.ems.backend.user.dto.UpdateUserRequest;
 import com.ems.backend.user.dto.UserResponse;
 import org.springframework.stereotype.Service;
@@ -43,15 +44,52 @@ public class UserService {
                 .toList();
     }
 
-    public PageResponse<UserResponse> getUsersPaged(int page, int size, String search) {
+    public PageResponse<UserResponse> getUsersPaged(
+            int page,
+            int size,
+            String search,
+            Role role,
+            Boolean active,
+            AccountStatus accountStatus,
+            EmploymentType employmentType,
+            String department,
+            boolean incompleteOnly
+    ) {
         String query = search != null ? search.trim().toLowerCase() : "";
+        String departmentFilter = department != null ? department.trim() : "";
         List<UserResponse> filtered = getAllUsers().stream()
                 .filter(user -> query.isEmpty()
                         || user.fullName().toLowerCase().contains(query)
                         || user.email().toLowerCase().contains(query)
-                        || user.role().name().toLowerCase().contains(query))
+                        || user.role().name().toLowerCase().contains(query)
+                        || containsIgnoreCase(user.employeeId(), query)
+                        || containsIgnoreCase(user.department(), query))
+                .filter(user -> role == null || user.role() == role)
+                .filter(user -> active == null || active.equals(user.active()))
+                .filter(user -> accountStatus == null || user.accountStatus() == accountStatus)
+                .filter(user -> employmentType == null || user.employmentType() == employmentType)
+                .filter(user -> departmentFilter.isEmpty() || departmentFilter.equalsIgnoreCase(user.department()))
+                .filter(user -> !incompleteOnly || hasIncompleteRecord(user))
                 .toList();
         return PageResponse.of(filtered, page, size);
+    }
+
+    public StaffDirectorySummaryResponse getStaffDirectorySummary() {
+        List<UserResponse> users = getAllUsers();
+        List<String> departments = users.stream()
+                .map(UserResponse::department)
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+        return new StaffDirectorySummaryResponse(
+                users.size(),
+                users.stream().filter(user -> Boolean.TRUE.equals(user.active())).count(),
+                users.stream().filter(user -> user.role() == Role.MANAGER).count(),
+                users.stream().filter(user -> user.accountStatus() != AccountStatus.VERIFIED).count(),
+                users.stream().filter(this::hasIncompleteRecord).count(),
+                departments
+        );
     }
 
     public UserResponse map(User user) {
@@ -200,6 +238,20 @@ public class UserService {
 
     private String normalize(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private boolean containsIgnoreCase(String value, String query) {
+        return value != null && value.toLowerCase().contains(query);
+    }
+
+    private boolean hasIncompleteRecord(UserResponse user) {
+        return user.employeeId() == null
+                || user.joiningDate() == null
+                || user.jobTitle() == null
+                || user.phone() == null
+                || user.emergencyContact() == null
+                || user.department() == null
+                || user.location() == null;
     }
 
     private String summary(User user) {

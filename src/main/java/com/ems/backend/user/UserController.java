@@ -5,6 +5,7 @@ import com.ems.backend.user.dto.UserResponse;
 import com.ems.backend.user.dto.StaffOverviewResponse;
 import com.ems.backend.user.dto.CreateStaffDocumentRequest;
 import com.ems.backend.user.dto.StaffDocumentResponse;
+import com.ems.backend.user.dto.StaffDirectorySummaryResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
@@ -82,12 +83,35 @@ public class UserController {
     public Object getAllUsers(
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer size,
-            @RequestParam(required = false) String search
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) Role role,
+            @RequestParam(required = false) Boolean active,
+            @RequestParam(required = false) AccountStatus accountStatus,
+            @RequestParam(required = false) EmploymentType employmentType,
+            @RequestParam(required = false) String department,
+            @RequestParam(defaultValue = "false") boolean incompleteOnly
     ) {
         if (page != null || size != null) {
-            return userService.getUsersPaged(page != null ? page : 0, size != null ? size : 20, search);
+            return userService.getUsersPaged(
+                    page != null ? page : 0,
+                    size != null ? size : 20,
+                    search,
+                    role,
+                    active,
+                    accountStatus,
+                    employmentType,
+                    department,
+                    incompleteOnly
+            );
         }
         return userService.getAllUsers();
+    }
+
+    @GetMapping("/summary")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Staff directory summary", description = "Company-wide staff counts and available department filters.")
+    public StaffDirectorySummaryResponse getStaffDirectorySummary() {
+        return userService.getStaffDirectorySummary();
     }
 
     @GetMapping("/{id}/overview")
