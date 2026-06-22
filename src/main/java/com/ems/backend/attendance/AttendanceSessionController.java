@@ -2,8 +2,12 @@ package com.ems.backend.attendance;
 
 import com.ems.backend.attendance.dto.AttendanceDaySummaryResponse;
 import com.ems.backend.attendance.dto.AttendanceSessionResponse;
+import com.ems.backend.attendance.dto.AttendanceCorrectionResponse;
+import com.ems.backend.attendance.dto.CreateAttendanceCorrectionRequest;
+import com.ems.backend.attendance.dto.ReviewAttendanceCorrectionRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -17,9 +21,11 @@ import java.util.List;
 @Tag(name = "Attendance", description = "Remote work sessions, daily duration summaries, and attendance audit endpoints")
 public class AttendanceSessionController {
     private final AttendanceSessionService service;
+    private final AttendanceCorrectionService correctionService;
 
-    public AttendanceSessionController(AttendanceSessionService service) {
+    public AttendanceSessionController(AttendanceSessionService service, AttendanceCorrectionService correctionService) {
         this.service = service;
+        this.correctionService = correctionService;
     }
 
     @PostMapping("/start")
@@ -75,5 +81,39 @@ public class AttendanceSessionController {
     @Operation(summary = "Audit all attendance sessions")
     public List<AttendanceSessionResponse> getAllSessions() {
         return service.getAllSessions();
+    }
+
+    @PostMapping("/corrections")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "Request an attendance session correction")
+    public AttendanceCorrectionResponse createCorrection(@Valid @RequestBody CreateAttendanceCorrectionRequest request) {
+        return correctionService.create(request);
+    }
+
+    @GetMapping("/corrections")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "List attendance corrections", description = "Employees see their own requests; admins and managers see all requests.")
+    public List<AttendanceCorrectionResponse> listCorrections() {
+        return correctionService.list();
+    }
+
+    @PatchMapping("/corrections/{correctionId}/approve")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @Operation(summary = "Approve an attendance correction")
+    public AttendanceCorrectionResponse approveCorrection(
+            @PathVariable Long correctionId,
+            @Valid @RequestBody ReviewAttendanceCorrectionRequest request
+    ) {
+        return correctionService.approve(correctionId, request);
+    }
+
+    @PatchMapping("/corrections/{correctionId}/reject")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @Operation(summary = "Reject an attendance correction")
+    public AttendanceCorrectionResponse rejectCorrection(
+            @PathVariable Long correctionId,
+            @Valid @RequestBody ReviewAttendanceCorrectionRequest request
+    ) {
+        return correctionService.reject(correctionId, request);
     }
 }

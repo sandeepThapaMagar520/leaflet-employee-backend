@@ -3,6 +3,8 @@ package com.ems.backend.attendance;
 import com.ems.backend.attendance.dto.AttendanceDaySummaryResponse;
 import com.ems.backend.attendance.dto.AttendanceSessionResponse;
 import com.ems.backend.common.SecurityUtils;
+import com.ems.backend.leave.LeaveRequestRepository;
+import com.ems.backend.leave.LeaveStatus;
 import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
 import com.ems.backend.user.UserRepository;
@@ -19,6 +21,7 @@ import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
@@ -28,28 +31,35 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 public class AttendanceSessionService {
     private static final long DEFAULT_REQUIRED_MINUTES = 7 * 60;
     private static final long DEFAULT_GRACE_MINUTES = 6 * 60;
+    private static final long DEFAULT_STALE_SESSION_MINUTES = 14 * 60;
 
     private final AttendanceSessionRepository repository;
     private final UserRepository userRepository;
+    private final LeaveRequestRepository leaveRequestRepository;
     private final SecurityUtils securityUtils;
     private final ZoneId attendanceZone;
     private final long requiredMinutes;
     private final long graceMinutes;
+    private final long staleSessionMinutes;
 
     public AttendanceSessionService(
             AttendanceSessionRepository repository,
             UserRepository userRepository,
+            LeaveRequestRepository leaveRequestRepository,
             SecurityUtils securityUtils,
             @Value("${app.attendance.zone-id:Asia/Kathmandu}") String attendanceZoneId,
             @Value("${app.attendance.required-minutes:" + DEFAULT_REQUIRED_MINUTES + "}") long requiredMinutes,
-            @Value("${app.attendance.grace-minutes:" + DEFAULT_GRACE_MINUTES + "}") long graceMinutes
+            @Value("${app.attendance.grace-minutes:" + DEFAULT_GRACE_MINUTES + "}") long graceMinutes,
+            @Value("${app.attendance.stale-session-minutes:" + DEFAULT_STALE_SESSION_MINUTES + "}") long staleSessionMinutes
     ) {
         this.repository = repository;
         this.userRepository = userRepository;
+        this.leaveRequestRepository = leaveRequestRepository;
         this.securityUtils = securityUtils;
         this.attendanceZone = ZoneId.of(attendanceZoneId);
         this.requiredMinutes = requiredMinutes;
         this.graceMinutes = graceMinutes;
+        this.staleSessionMinutes = staleSessionMinutes;
     }
 
     public AttendanceSessionResponse startSession() {
@@ -99,7 +109,8 @@ public class AttendanceSessionService {
 
     public AttendanceDaySummaryResponse getMyTodaySummary() {
         User currentUser = getCurrentUser();
-        return buildSummary(currentUser, LocalDate.now(attendanceZone), Instant.now());
+        LocalDate today = LocalDate.now(attendanceZone);
+        return buildSummary(currentUser, today, Instant.now(), isOnApprovedLeave(currentUser.getId(), today));
     }
 
     public List<AttendanceDaySummaryResponse> getTeamDailySummary(LocalDate date) {
@@ -112,12 +123,23 @@ public class AttendanceSessionService {
                 .findSessionsOverlappingDay(from, to)
                 .stream()
                 .collect(Collectors.groupingBy(session -> session.getUser().getId()));
+        Set<Long> usersOnLeave = leaveRequestRepository
+                .findByStatusAndStartDateLessThanEqualAndEndDateGreaterThanEqual(LeaveStatus.APPROVED, workDate, workDate)
+                .stream()
+                .map(leave -> leave.getUser().getId())
+                .collect(Collectors.toSet());
 
         return userRepository.findAll().stream()
                 .filter(user -> Boolean.TRUE.equals(user.getActive()))
                 .filter(user -> user.getRole() != Role.ADMIN)
                 .sorted(Comparator.comparing(User::getFullName, String.CASE_INSENSITIVE_ORDER))
-                .map(user -> buildSummary(user, workDate, sessionsByUser.getOrDefault(user.getId(), List.of()), now))
+                .map(user -> buildSummary(
+                        user,
+                        workDate,
+                        sessionsByUser.getOrDefault(user.getId(), List.of()),
+                        now,
+                        usersOnLeave.contains(user.getId())
+                ))
                 .toList();
     }
     
@@ -138,15 +160,21 @@ public class AttendanceSessionService {
         return getMySessions();
     }
 
-    private AttendanceDaySummaryResponse buildSummary(User user, LocalDate workDate, Instant now) {
+    private AttendanceDaySummaryResponse buildSummary(User user, LocalDate workDate, Instant now, boolean onLeave) {
         Instant from = workDate.atStartOfDay(attendanceZone).toInstant();
         Instant to = workDate.plusDays(1).atStartOfDay(attendanceZone).toInstant();
         List<AttendanceSession> sessions = repository
                 .findUserSessionsOverlappingDay(user.getId(), from, to);
-        return buildSummary(user, workDate, sessions, now);
+        return buildSummary(user, workDate, sessions, now, onLeave);
     }
 
-    private AttendanceDaySummaryResponse buildSummary(User user, LocalDate workDate, List<AttendanceSession> sessions, Instant now) {
+    private AttendanceDaySummaryResponse buildSummary(
+            User user,
+            LocalDate workDate,
+            List<AttendanceSession> sessions,
+            Instant now,
+            boolean onLeave
+    ) {
         Instant from = workDate.atStartOfDay(attendanceZone).toInstant();
         Instant to = workDate.plusDays(1).atStartOfDay(attendanceZone).toInstant();
         Instant firstStart = sessions.stream()
@@ -183,7 +211,7 @@ public class AttendanceSessionService {
                 requiredMinutes,
                 graceMinutes,
                 remainingMinutes,
-                resolveStatus(totalMinutes, activeStart != null, sessions.isEmpty())
+                resolveStatus(workDate, totalMinutes, activeStart, sessions.isEmpty(), onLeave, now)
         );
     }
 
@@ -197,8 +225,21 @@ public class AttendanceSessionService {
         return Duration.between(start, end).toMinutes();
     }
 
-    private AttendanceDayStatus resolveStatus(long totalMinutes, boolean active, boolean noSessions) {
-        if (active) {
+    private AttendanceDayStatus resolveStatus(
+            LocalDate workDate,
+            long totalMinutes,
+            Instant activeStart,
+            boolean noSessions,
+            boolean onLeave,
+            Instant now
+    ) {
+        if (onLeave && noSessions) {
+            return AttendanceDayStatus.ON_LEAVE;
+        }
+        if (activeStart != null && isStaleSession(workDate, activeStart, now)) {
+            return AttendanceDayStatus.MISSING_CHECKOUT;
+        }
+        if (activeStart != null) {
             return AttendanceDayStatus.IN_PROGRESS;
         }
         if (noSessions) {
@@ -211,6 +252,18 @@ public class AttendanceSessionService {
             return AttendanceDayStatus.COMPLETED_WITH_GRACE;
         }
         return AttendanceDayStatus.UNDER_HOURS;
+    }
+
+    private boolean isStaleSession(LocalDate workDate, Instant activeStart, Instant now) {
+        LocalDate today = LocalDate.now(attendanceZone);
+        return workDate.isBefore(today) || Duration.between(activeStart, now).toMinutes() >= staleSessionMinutes;
+    }
+
+    private boolean isOnApprovedLeave(Long userId, LocalDate date) {
+        return leaveRequestRepository
+                .findByStatusAndStartDateLessThanEqualAndEndDateGreaterThanEqual(LeaveStatus.APPROVED, date, date)
+                .stream()
+                .anyMatch(leave -> leave.getUser().getId().equals(userId));
     }
 
     private User getCurrentUser() {
