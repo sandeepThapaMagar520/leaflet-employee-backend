@@ -61,6 +61,13 @@ public class UserController {
         return userProfileService.updateMyProfile(request);
     }
 
+    @GetMapping("/me/documents")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "My staff documents", description = "Returns HR documents uploaded to the authenticated user's staff record.")
+    public List<StaffDocumentResponse> getMyDocuments() {
+        return userService.getMyDocuments();
+    }
+
     @GetMapping("/me/notification-preferences")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "Notification preferences", description = "Returns email notification preferences for the authenticated user.")

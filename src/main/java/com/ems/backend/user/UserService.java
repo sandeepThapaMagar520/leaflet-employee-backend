@@ -193,6 +193,14 @@ public class UserService {
         return mapDocument(saved);
     }
 
+    public List<StaffDocumentResponse> getMyDocuments() {
+        User currentUser = securityUtils.getCurrentUser();
+        return staffDocumentRepository.findByUserIdOrderByCreatedAtDesc(currentUser.getId())
+                .stream()
+                .map(this::mapDocument)
+                .toList();
+    }
+
     public void deleteDocument(Long userId, Long documentId) {
         StaffDocument document = staffDocumentRepository.findById(documentId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Document not found"));
