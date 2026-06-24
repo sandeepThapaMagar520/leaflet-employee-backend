@@ -2,24 +2,33 @@ package com.ems.backend.task;
 
 import com.ems.backend.notification.NotificationService;
 import com.ems.backend.notification.NotificationType;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 
 @Service
 public class TaskReminderService {
     private final TaskRepository taskRepository;
     private final NotificationService notificationService;
+    private final ZoneId businessZone;
 
-    public TaskReminderService(TaskRepository taskRepository, NotificationService notificationService) {
+    public TaskReminderService(
+            TaskRepository taskRepository,
+            NotificationService notificationService,
+            @Value("${app.attendance.zone-id:Asia/Kathmandu}") String businessZoneId
+    ) {
         this.taskRepository = taskRepository;
         this.notificationService = notificationService;
+        this.businessZone = ZoneId.of(businessZoneId);
     }
 
     @Scheduled(cron = "0 0 8 * * *")
     public void sendDueDateReminders() {
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(businessZone);
         LocalDate tomorrow = today.plusDays(1);
 
         for (Task task : taskRepository.findByStatusNotAndDueDateIsNotNull(TaskStatus.DONE.name())) {
@@ -27,19 +36,39 @@ public class TaskReminderService {
                 notificationService.notifyUser(
                         task.getAssignedTo(),
                         NotificationType.TASK_OVERDUE,
-                        "Task overdue",
-                        "\"" + task.getTitle() + "\" was due on " + task.getDueDate(),
+                        reminderTitle(task, "overdue"),
+                        "\"" + task.getTitle() + "\" was due " + overdueDays(task, today) + " ago. Priority: " + task.getPriority() + ".",
                         "/projects/" + task.getProject().getId()
                 );
             } else if (!task.getDueDate().isAfter(tomorrow)) {
                 notificationService.notifyUser(
                         task.getAssignedTo(),
                         NotificationType.TASK_DUE_SOON,
-                        "Task due soon",
-                        "\"" + task.getTitle() + "\" is due on " + task.getDueDate(),
+                        reminderTitle(task, task.getDueDate().isEqual(today) ? "due today" : "due soon"),
+                        "\"" + task.getTitle() + "\" is due " + dueLabel(task, today) + ". Priority: " + task.getPriority() + ".",
                         "/projects/" + task.getProject().getId()
                 );
             }
         }
+    }
+
+    private String reminderTitle(Task task, String state) {
+        return switch (task.getPriority()) {
+            case CRITICAL -> "Critical task " + state;
+            case HIGH -> "High priority task " + state;
+            default -> "Task " + state;
+        };
+    }
+
+    private String overdueDays(Task task, LocalDate today) {
+        long days = ChronoUnit.DAYS.between(task.getDueDate(), today);
+        return days == 1 ? "1 day" : days + " days";
+    }
+
+    private String dueLabel(Task task, LocalDate today) {
+        if (task.getDueDate().isEqual(today)) {
+            return "today";
+        }
+        return "tomorrow";
     }
 }

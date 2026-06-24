@@ -16,10 +16,13 @@ import com.ems.backend.task.dto.UpdateTaskStatusRequest;
 import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
 import com.ems.backend.user.UserRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -38,6 +41,7 @@ public class TaskService {
     private final ProjectAccessService projectAccessService;
     private final NotificationService notificationService;
     private final ProjectTaskBoardRepository projectTaskBoardRepository;
+    private final ZoneId businessZone;
 
     public TaskService(
             TaskRepository taskRepository,
@@ -46,7 +50,8 @@ public class TaskService {
             SecurityUtils securityUtils,
             ProjectAccessService projectAccessService,
             NotificationService notificationService,
-            ProjectTaskBoardRepository projectTaskBoardRepository
+            ProjectTaskBoardRepository projectTaskBoardRepository,
+            @Value("${app.attendance.zone-id:Asia/Kathmandu}") String businessZoneId
     ) {
         this.taskRepository = taskRepository;
         this.taskCommentRepository = taskCommentRepository;
@@ -55,6 +60,7 @@ public class TaskService {
         this.projectAccessService = projectAccessService;
         this.notificationService = notificationService;
         this.projectTaskBoardRepository = projectTaskBoardRepository;
+        this.businessZone = ZoneId.of(businessZoneId);
     }
 
     public TaskResponse createTask(CreateTaskRequest request) {
@@ -63,6 +69,7 @@ public class TaskService {
         User assignee = getUserById(request.assignedToId());
         requireAssignableTaskUser(assignee);
         requireProjectTeamMember(project, assignee);
+        validateDueDate(request.dueDate());
 
         Task task = new Task();
         task.setTitle(request.title());
@@ -121,6 +128,7 @@ public class TaskService {
 
         requireAssignableTaskUser(assignee);
         requireProjectTeamMember(project, assignee);
+        validateDueDate(request.dueDate());
 
         task.setTitle(request.title());
         task.setDescription(request.description());
@@ -252,6 +260,12 @@ public class TaskService {
     private void requireAssignableTaskUser(User assignee) {
         if (assignee.getRole() == Role.ADMIN) {
             throw new ResponseStatusException(BAD_REQUEST, "Tasks can be assigned only to employees or managers");
+        }
+    }
+
+    private void validateDueDate(LocalDate dueDate) {
+        if (dueDate != null && dueDate.isBefore(LocalDate.now(businessZone))) {
+            throw new ResponseStatusException(BAD_REQUEST, "Due date must be today or a future date");
         }
     }
 
