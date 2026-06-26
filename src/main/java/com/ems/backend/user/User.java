@@ -79,6 +79,9 @@ public class User {
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 
+    @Column(name = "leave_balance_adjustment_days", nullable = false)
+    private Integer leaveBalanceAdjustmentDays = 0;
+
     @Column(name = "password_changed_at")
     private Instant passwordChangedAt;
 

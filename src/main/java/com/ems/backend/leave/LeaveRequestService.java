@@ -4,9 +4,11 @@ import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.leave.dto.CreateLeaveRequest;
 import com.ems.backend.leave.dto.LeaveBalanceResponse;
 import com.ems.backend.leave.dto.LeaveRequestResponse;
+import com.ems.backend.leave.dto.UpdateLeaveBalanceRequest;
 import com.ems.backend.leave.dto.UpdateLeaveStatusRequest;
 import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
+import com.ems.backend.user.UserRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -21,10 +23,12 @@ public class LeaveRequestService {
     private static final int ANNUAL_ALLOWANCE_DAYS = 20;
 
     private final LeaveRequestRepository repository;
+    private final UserRepository userRepository;
     private final SecurityUtils securityUtils;
 
-    public LeaveRequestService(LeaveRequestRepository repository, SecurityUtils securityUtils) {
+    public LeaveRequestService(LeaveRequestRepository repository, UserRepository userRepository, SecurityUtils securityUtils) {
         this.repository = repository;
+        this.userRepository = userRepository;
         this.securityUtils = securityUtils;
     }
 
@@ -55,17 +59,53 @@ public class LeaveRequestService {
 
     public LeaveBalanceResponse getMyBalance() {
         User currentUser = getCurrentUser();
+        return balanceFor(currentUser);
+    }
+
+    public LeaveBalanceResponse getBalanceForUser(Long userId) {
+        User currentUser = getCurrentUser();
+        if (!canReview(currentUser)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only admins and managers can view staff leave balances");
+        }
+        User targetUser = userRepository.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        return balanceFor(targetUser);
+    }
+
+    public LeaveBalanceResponse updateUserBalance(Long userId, UpdateLeaveBalanceRequest request) {
+        User currentUser = getCurrentUser();
+        if (currentUser.getRole() != Role.ADMIN) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only admins can update leave balances");
+        }
+        User targetUser = userRepository.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        int approvedDays = approvedAnnualDays(targetUser);
+        targetUser.setLeaveBalanceAdjustmentDays(request.remainingDays() + approvedDays - ANNUAL_ALLOWANCE_DAYS);
+        User saved = userRepository.save(targetUser);
+        return balanceFor(saved);
+    }
+
+    private LeaveBalanceResponse balanceFor(User user) {
+        int approvedDays = approvedAnnualDays(user);
+        int annualAllowance = annualAllowance(user);
+        return new LeaveBalanceResponse(
+                annualAllowance,
+                approvedDays,
+                Math.max(annualAllowance - approvedDays, 0)
+        );
+    }
+
+    private int approvedAnnualDays(User user) {
         int currentYear = LocalDate.now().getYear();
-        int approvedDays = repository.findByUserIdAndStatus(currentUser.getId(), LeaveStatus.APPROVED).stream()
+        return repository.findByUserIdAndStatus(user.getId(), LeaveStatus.APPROVED).stream()
                 .filter(request -> request.getLeaveType() == LeaveType.ANNUAL)
                 .filter(request -> request.getStartDate().getYear() == currentYear || request.getEndDate().getYear() == currentYear)
                 .mapToInt(this::requestedDays)
                 .sum();
-        return new LeaveBalanceResponse(
-                ANNUAL_ALLOWANCE_DAYS,
-                approvedDays,
-                Math.max(ANNUAL_ALLOWANCE_DAYS - approvedDays, 0)
-        );
+    }
+
+    private int annualAllowance(User user) {
+        return Math.max(ANNUAL_ALLOWANCE_DAYS + (user.getLeaveBalanceAdjustmentDays() != null ? user.getLeaveBalanceAdjustmentDays() : 0), 0);
     }
 
     public LeaveRequestResponse approve(Long requestId, UpdateLeaveStatusRequest request) {

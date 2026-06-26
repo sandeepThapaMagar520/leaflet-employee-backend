@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
+import static org.springframework.http.HttpStatus.FORBIDDEN;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
@@ -64,17 +65,25 @@ public class AttendanceSessionService {
 
     public AttendanceSessionResponse startSession() {
         User currentUser = getCurrentUser();
-
-        List<AttendanceSession> activeSessions = repository.findByUserIdAndEndTimeIsNull(currentUser.getId());
-        if (!activeSessions.isEmpty()) {
-            throw new ResponseStatusException(BAD_REQUEST, "You already have an active session.");
+        LocalDate today = LocalDate.now(attendanceZone);
+        if (isOnApprovedLeave(currentUser.getId(), today)) {
+            throw new ResponseStatusException(BAD_REQUEST, "You are on approved leave today. Ask an admin to start attendance if work is required.");
         }
 
-        AttendanceSession session = new AttendanceSession();
-        session.setUser(currentUser);
-        session.setStartTime(Instant.now());
+        return startSessionForUser(currentUser);
+    }
 
-        return map(repository.save(session));
+    public AttendanceSessionResponse startUserActiveSession(Long userId) {
+        User currentUser = getCurrentUser();
+        if (currentUser.getRole() != Role.ADMIN && currentUser.getRole() != Role.MANAGER) {
+            throw new ResponseStatusException(FORBIDDEN, "Only admins and managers can start team sessions.");
+        }
+        User targetUser = userRepository.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
+        if (targetUser.getRole() == Role.ADMIN) {
+            throw new ResponseStatusException(BAD_REQUEST, "Admin attendance sessions cannot be started from Team Attendance.");
+        }
+        return startSessionForUser(targetUser);
     }
 
     public AttendanceSessionResponse endSession() {
@@ -85,14 +94,27 @@ public class AttendanceSessionService {
             throw new ResponseStatusException(BAD_REQUEST, "No active session found to end.");
         }
 
-        AttendanceSession session = activeSessions.getFirst();
-        session.setEndTime(Instant.now());
-        
-        Duration duration = Duration.between(session.getStartTime(), session.getEndTime());
-        double hours = duration.toMillis() / 3600000.0;
-        session.setTotalHours(BigDecimal.valueOf(hours).setScale(2, RoundingMode.HALF_UP));
+        return closeSession(activeSessions.getFirst(), Instant.now());
+    }
 
-        return map(repository.save(session));
+    public AttendanceSessionResponse endUserActiveSession(Long userId) {
+        User currentUser = getCurrentUser();
+        if (currentUser.getRole() != Role.ADMIN && currentUser.getRole() != Role.MANAGER) {
+            throw new ResponseStatusException(FORBIDDEN, "Only admins and managers can close team sessions.");
+        }
+
+        User targetUser = userRepository.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
+        if (targetUser.getRole() == Role.ADMIN) {
+            throw new ResponseStatusException(BAD_REQUEST, "Admin attendance sessions cannot be closed from Team Attendance.");
+        }
+
+        List<AttendanceSession> activeSessions = repository.findByUserIdAndEndTimeIsNull(targetUser.getId());
+        if (activeSessions.isEmpty()) {
+            throw new ResponseStatusException(BAD_REQUEST, "No active session found for this team member.");
+        }
+
+        return closeSession(activeSessions.getFirst(), Instant.now());
     }
 
     public List<AttendanceSessionResponse> getMySessions() {
@@ -264,6 +286,27 @@ public class AttendanceSessionService {
                 .findByStatusAndStartDateLessThanEqualAndEndDateGreaterThanEqual(LeaveStatus.APPROVED, date, date)
                 .stream()
                 .anyMatch(leave -> leave.getUser().getId().equals(userId));
+    }
+
+    private AttendanceSessionResponse startSessionForUser(User user) {
+        List<AttendanceSession> activeSessions = repository.findByUserIdAndEndTimeIsNull(user.getId());
+        if (!activeSessions.isEmpty()) {
+            throw new ResponseStatusException(BAD_REQUEST, "This user already has an active session.");
+        }
+
+        AttendanceSession session = new AttendanceSession();
+        session.setUser(user);
+        session.setStartTime(Instant.now());
+
+        return map(repository.save(session));
+    }
+
+    private AttendanceSessionResponse closeSession(AttendanceSession session, Instant endTime) {
+        session.setEndTime(endTime);
+        Duration duration = Duration.between(session.getStartTime(), session.getEndTime());
+        double hours = duration.toMillis() / 3600000.0;
+        session.setTotalHours(BigDecimal.valueOf(hours).setScale(2, RoundingMode.HALF_UP));
+        return map(repository.save(session));
     }
 
     private User getCurrentUser() {

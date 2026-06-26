@@ -3,6 +3,7 @@ package com.ems.backend.leave;
 import com.ems.backend.leave.dto.CreateLeaveRequest;
 import com.ems.backend.leave.dto.LeaveBalanceResponse;
 import com.ems.backend.leave.dto.LeaveRequestResponse;
+import com.ems.backend.leave.dto.UpdateLeaveBalanceRequest;
 import com.ems.backend.leave.dto.UpdateLeaveStatusRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -41,6 +42,23 @@ public class LeaveRequestController {
     @Operation(summary = "Get my leave balance")
     public LeaveBalanceResponse getMyBalance() {
         return service.getMyBalance();
+    }
+
+    @GetMapping("/users/{userId}/balance")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @Operation(summary = "Get staff leave balance")
+    public LeaveBalanceResponse getUserBalance(@PathVariable Long userId) {
+        return service.getBalanceForUser(userId);
+    }
+
+    @PatchMapping("/users/{userId}/balance")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Update staff remaining leave balance")
+    public LeaveBalanceResponse updateUserBalance(
+            @PathVariable Long userId,
+            @Valid @RequestBody UpdateLeaveBalanceRequest request
+    ) {
+        return service.updateUserBalance(userId, request);
     }
 
     @PatchMapping("/{requestId}/approve")

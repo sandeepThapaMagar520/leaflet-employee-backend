@@ -35,11 +35,25 @@ public class AttendanceSessionController {
         return service.startSession();
     }
 
+    @PostMapping("/users/{userId}/active/start")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @Operation(summary = "Start a team member's work session")
+    public AttendanceSessionResponse startUserActiveSession(@PathVariable Long userId) {
+        return service.startUserActiveSession(userId);
+    }
+
     @PostMapping("/end")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "Stop work session")
     public AttendanceSessionResponse endSession() {
         return service.endSession();
+    }
+
+    @PatchMapping("/users/{userId}/active/end")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    @Operation(summary = "Stop a team member's active work session")
+    public AttendanceSessionResponse endUserActiveSession(@PathVariable Long userId) {
+        return service.endUserActiveSession(userId);
     }
 
     @GetMapping("/me/today")

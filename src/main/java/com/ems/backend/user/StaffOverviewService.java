@@ -28,6 +28,8 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
 public class StaffOverviewService {
+    private static final int BASE_ANNUAL_LEAVE_ALLOWANCE = 20;
+
     private final UserRepository userRepository;
     private final ProjectService projectService;
     private final TaskService taskService;
@@ -83,7 +85,7 @@ public class StaffOverviewService {
 
         return new StaffOverviewResponse(
                 userService.map(user),
-                buildSummary(projects, tasks, attendance, leaveRequests, dailyLogs),
+                buildSummary(user, projects, tasks, attendance, leaveRequests, dailyLogs),
                 projects,
                 tasks,
                 attendance,
@@ -105,6 +107,7 @@ public class StaffOverviewService {
     }
 
     private StaffOverviewResponse.Summary buildSummary(
+            User user,
             List<ProjectResponse> projects,
             List<TaskResponse> tasks,
             List<AttendanceSessionResponse> attendance,
@@ -136,6 +139,8 @@ public class StaffOverviewService {
                         || request.endDate().getYear() == currentYear)
                 .mapToInt(LeaveRequestResponse::requestedDays)
                 .sum();
+        int annualLeaveAllowance = Math.max(BASE_ANNUAL_LEAVE_ALLOWANCE
+                + (user.getLeaveBalanceAdjustmentDays() != null ? user.getLeaveBalanceAdjustmentDays() : 0), 0);
 
         return new StaffOverviewResponse.Summary(
                 projects.size(),
@@ -150,6 +155,8 @@ public class StaffOverviewService {
                 attendanceDays,
                 lastAttendanceAt,
                 approvedLeaveDays,
+                annualLeaveAllowance,
+                Math.max(annualLeaveAllowance - approvedLeaveDays, 0),
                 (int) leaveRequests.stream().filter(request -> request.status() == LeaveStatus.PENDING).count(),
                 dailyLogs.size(),
                 dailyLogs.stream().map(DailyLogResponse::logDate).max(LocalDate::compareTo).orElse(null)
