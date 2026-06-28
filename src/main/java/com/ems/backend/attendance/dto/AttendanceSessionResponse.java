@@ -9,5 +9,8 @@ public record AttendanceSessionResponse(
         String userFullName,
         Instant startTime,
         Instant endTime,
-        BigDecimal totalHours
+        BigDecimal totalHours,
+        Instant lastHeartbeatAt,
+        Instant breakStartedAt,
+        Integer breakMinutes
 ) {}

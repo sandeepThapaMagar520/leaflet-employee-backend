@@ -49,6 +49,27 @@ public class AttendanceSessionController {
         return service.endSession();
     }
 
+    @PostMapping("/heartbeat")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "Refresh active session heartbeat")
+    public AttendanceSessionResponse heartbeat() {
+        return service.heartbeat();
+    }
+
+    @PostMapping("/break/start")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "Start break for active work session")
+    public AttendanceSessionResponse startBreak() {
+        return service.startBreak();
+    }
+
+    @PostMapping("/break/end")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "End break for active work session")
+    public AttendanceSessionResponse endBreak() {
+        return service.endBreak();
+    }
+
     @PatchMapping("/users/{userId}/active/end")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "Stop a team member's active work session")

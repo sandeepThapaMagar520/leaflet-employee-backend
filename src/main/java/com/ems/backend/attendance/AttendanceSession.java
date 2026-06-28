@@ -29,6 +29,15 @@ public class AttendanceSession {
     @Column(precision = 5, scale = 2)
     private BigDecimal totalHours;
 
+    @Column(name = "last_heartbeat_at")
+    private Instant lastHeartbeatAt;
+
+    @Column(name = "break_started_at")
+    private Instant breakStartedAt;
+
+    @Column(name = "break_minutes", nullable = false)
+    private Integer breakMinutes = 0;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 

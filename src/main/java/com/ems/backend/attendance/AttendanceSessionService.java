@@ -33,6 +33,7 @@ public class AttendanceSessionService {
     private static final long DEFAULT_REQUIRED_MINUTES = 7 * 60;
     private static final long DEFAULT_GRACE_MINUTES = 6 * 60;
     private static final long DEFAULT_STALE_SESSION_MINUTES = 14 * 60;
+    private static final long DEFAULT_HEARTBEAT_STALE_MINUTES = 10;
 
     private final AttendanceSessionRepository repository;
     private final UserRepository userRepository;
@@ -42,6 +43,7 @@ public class AttendanceSessionService {
     private final long requiredMinutes;
     private final long graceMinutes;
     private final long staleSessionMinutes;
+    private final long heartbeatStaleMinutes;
 
     public AttendanceSessionService(
             AttendanceSessionRepository repository,
@@ -51,7 +53,8 @@ public class AttendanceSessionService {
             @Value("${app.attendance.zone-id:Asia/Kathmandu}") String attendanceZoneId,
             @Value("${app.attendance.required-minutes:" + DEFAULT_REQUIRED_MINUTES + "}") long requiredMinutes,
             @Value("${app.attendance.grace-minutes:" + DEFAULT_GRACE_MINUTES + "}") long graceMinutes,
-            @Value("${app.attendance.stale-session-minutes:" + DEFAULT_STALE_SESSION_MINUTES + "}") long staleSessionMinutes
+            @Value("${app.attendance.stale-session-minutes:" + DEFAULT_STALE_SESSION_MINUTES + "}") long staleSessionMinutes,
+            @Value("${app.attendance.heartbeat-stale-minutes:" + DEFAULT_HEARTBEAT_STALE_MINUTES + "}") long heartbeatStaleMinutes
     ) {
         this.repository = repository;
         this.userRepository = userRepository;
@@ -61,6 +64,7 @@ public class AttendanceSessionService {
         this.requiredMinutes = requiredMinutes;
         this.graceMinutes = graceMinutes;
         this.staleSessionMinutes = staleSessionMinutes;
+        this.heartbeatStaleMinutes = heartbeatStaleMinutes;
     }
 
     public AttendanceSessionResponse startSession() {
@@ -95,6 +99,35 @@ public class AttendanceSessionService {
         }
 
         return closeSession(activeSessions.getFirst(), Instant.now());
+    }
+
+    public AttendanceSessionResponse heartbeat() {
+        AttendanceSession session = getCurrentUserActiveSession();
+        session.setLastHeartbeatAt(Instant.now());
+        return map(repository.save(session));
+    }
+
+    public AttendanceSessionResponse startBreak() {
+        AttendanceSession session = getCurrentUserActiveSession();
+        if (session.getBreakStartedAt() != null) {
+            throw new ResponseStatusException(BAD_REQUEST, "You are already on break.");
+        }
+        Instant now = Instant.now();
+        session.setBreakStartedAt(now);
+        session.setLastHeartbeatAt(now);
+        return map(repository.save(session));
+    }
+
+    public AttendanceSessionResponse endBreak() {
+        AttendanceSession session = getCurrentUserActiveSession();
+        if (session.getBreakStartedAt() == null) {
+            throw new ResponseStatusException(BAD_REQUEST, "No active break found.");
+        }
+        Instant now = Instant.now();
+        session.setBreakMinutes(Math.toIntExact(totalBreakMinutes(session, now)));
+        session.setBreakStartedAt(null);
+        session.setLastHeartbeatAt(now);
+        return map(repository.save(session));
     }
 
     public AttendanceSessionResponse endUserActiveSession(Long userId) {
@@ -216,6 +249,12 @@ public class AttendanceSessionService {
                 .map(start -> start.isBefore(from) ? from : start)
                 .findFirst()
                 .orElse(null);
+        AttendanceSession activeSession = sessions.stream()
+                .filter(session -> session.getEndTime() == null)
+                .findFirst()
+                .orElse(null);
+        Instant activeBreakStart = activeSession != null ? activeSession.getBreakStartedAt() : null;
+        Instant activeLastHeartbeat = activeSession != null ? activeSession.getLastHeartbeatAt() : null;
 
         long totalMinutes = sessions.stream()
                 .mapToLong(session -> sessionMinutes(session, from, to, now))
@@ -233,7 +272,7 @@ public class AttendanceSessionService {
                 requiredMinutes,
                 graceMinutes,
                 remainingMinutes,
-                resolveStatus(workDate, totalMinutes, activeStart, sessions.isEmpty(), onLeave, now)
+                resolveStatus(workDate, totalMinutes, activeStart, activeBreakStart, activeLastHeartbeat, sessions.isEmpty(), onLeave, now)
         );
     }
 
@@ -244,13 +283,17 @@ public class AttendanceSessionService {
         if (end.isBefore(start)) {
             return 0;
         }
-        return Duration.between(start, end).toMinutes();
+        long elapsedMinutes = Duration.between(start, end).toMinutes();
+        long breakMinutes = totalBreakMinutes(session, end);
+        return Math.max(elapsedMinutes - breakMinutes, 0);
     }
 
     private AttendanceDayStatus resolveStatus(
             LocalDate workDate,
             long totalMinutes,
             Instant activeStart,
+            Instant activeBreakStart,
+            Instant activeLastHeartbeat,
             boolean noSessions,
             boolean onLeave,
             Instant now
@@ -258,8 +301,14 @@ public class AttendanceSessionService {
         if (onLeave && noSessions) {
             return AttendanceDayStatus.ON_LEAVE;
         }
+        if (activeStart != null && isHeartbeatStale(activeLastHeartbeat, now)) {
+            return AttendanceDayStatus.MISSING_CHECKOUT;
+        }
         if (activeStart != null && isStaleSession(workDate, activeStart, now)) {
             return AttendanceDayStatus.MISSING_CHECKOUT;
+        }
+        if (activeBreakStart != null) {
+            return AttendanceDayStatus.ON_BREAK;
         }
         if (activeStart != null) {
             return AttendanceDayStatus.IN_PROGRESS;
@@ -281,6 +330,10 @@ public class AttendanceSessionService {
         return workDate.isBefore(today) || Duration.between(activeStart, now).toMinutes() >= staleSessionMinutes;
     }
 
+    private boolean isHeartbeatStale(Instant lastHeartbeatAt, Instant now) {
+        return lastHeartbeatAt != null && Duration.between(lastHeartbeatAt, now).toMinutes() >= heartbeatStaleMinutes;
+    }
+
     private boolean isOnApprovedLeave(Long userId, LocalDate date) {
         return leaveRequestRepository
                 .findByStatusAndStartDateLessThanEqualAndEndDateGreaterThanEqual(LeaveStatus.APPROVED, date, date)
@@ -296,17 +349,43 @@ public class AttendanceSessionService {
 
         AttendanceSession session = new AttendanceSession();
         session.setUser(user);
-        session.setStartTime(Instant.now());
+        Instant now = Instant.now();
+        session.setStartTime(now);
+        session.setLastHeartbeatAt(now);
 
         return map(repository.save(session));
     }
 
     private AttendanceSessionResponse closeSession(AttendanceSession session, Instant endTime) {
         session.setEndTime(endTime);
-        Duration duration = Duration.between(session.getStartTime(), session.getEndTime());
-        double hours = duration.toMillis() / 3600000.0;
+        if (session.getBreakStartedAt() != null) {
+            session.setBreakMinutes(Math.toIntExact(totalBreakMinutes(session, endTime)));
+            session.setBreakStartedAt(null);
+        }
+        long workedMinutes = sessionMinutes(session, session.getStartTime(), endTime, endTime);
+        double hours = workedMinutes / 60.0;
         session.setTotalHours(BigDecimal.valueOf(hours).setScale(2, RoundingMode.HALF_UP));
         return map(repository.save(session));
+    }
+
+    private AttendanceSession getCurrentUserActiveSession() {
+        User currentUser = getCurrentUser();
+        List<AttendanceSession> activeSessions = repository.findByUserIdAndEndTimeIsNull(currentUser.getId());
+        if (activeSessions.isEmpty()) {
+            throw new ResponseStatusException(BAD_REQUEST, "No active session found.");
+        }
+        return activeSessions.getFirst();
+    }
+
+    private long totalBreakMinutes(AttendanceSession session, Instant until) {
+        long savedBreakMinutes = session.getBreakMinutes() != null ? session.getBreakMinutes() : 0;
+        if (session.getBreakStartedAt() == null) {
+            return savedBreakMinutes;
+        }
+        if (until.isBefore(session.getBreakStartedAt())) {
+            return savedBreakMinutes;
+        }
+        return savedBreakMinutes + Duration.between(session.getBreakStartedAt(), until).toMinutes();
     }
 
     private User getCurrentUser() {
@@ -322,7 +401,10 @@ public class AttendanceSessionService {
                 session.getUser().getFullName(),
                 session.getStartTime(),
                 session.getEndTime(),
-                session.getTotalHours()
+                session.getTotalHours(),
+                session.getLastHeartbeatAt(),
+                session.getBreakStartedAt(),
+                session.getBreakMinutes()
         );
     }
 }
