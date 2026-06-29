@@ -10,6 +10,7 @@ import com.ems.backend.leave.dto.LeaveRequestResponse;
 import com.ems.backend.project.ProjectService;
 import com.ems.backend.project.ProjectStatus;
 import com.ems.backend.project.dto.ProjectResponse;
+import com.ems.backend.settings.AppSettingsService;
 import com.ems.backend.task.TaskService;
 import com.ems.backend.task.TaskStatus;
 import com.ems.backend.task.dto.TaskResponse;
@@ -28,13 +29,12 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
 public class StaffOverviewService {
-    private static final int BASE_ANNUAL_LEAVE_ALLOWANCE = 20;
-
     private final UserRepository userRepository;
     private final ProjectService projectService;
     private final TaskService taskService;
     private final AttendanceSessionService attendanceSessionService;
     private final LeaveRequestService leaveRequestService;
+    private final AppSettingsService settingsService;
     private final DailyLogService dailyLogService;
     private final StaffDocumentRepository staffDocumentRepository;
     private final StaffAuditEventRepository staffAuditEventRepository;
@@ -46,6 +46,7 @@ public class StaffOverviewService {
             TaskService taskService,
             AttendanceSessionService attendanceSessionService,
             LeaveRequestService leaveRequestService,
+            AppSettingsService settingsService,
             DailyLogService dailyLogService,
             StaffDocumentRepository staffDocumentRepository,
             StaffAuditEventRepository staffAuditEventRepository,
@@ -56,6 +57,7 @@ public class StaffOverviewService {
         this.taskService = taskService;
         this.attendanceSessionService = attendanceSessionService;
         this.leaveRequestService = leaveRequestService;
+        this.settingsService = settingsService;
         this.dailyLogService = dailyLogService;
         this.staffDocumentRepository = staffDocumentRepository;
         this.staffAuditEventRepository = staffAuditEventRepository;
@@ -139,7 +141,7 @@ public class StaffOverviewService {
                         || request.endDate().getYear() == currentYear)
                 .mapToInt(LeaveRequestResponse::requestedDays)
                 .sum();
-        int annualLeaveAllowance = Math.max(BASE_ANNUAL_LEAVE_ALLOWANCE
+        int annualLeaveAllowance = Math.max(settingsService.annualLeaveDays()
                 + (user.getLeaveBalanceAdjustmentDays() != null ? user.getLeaveBalanceAdjustmentDays() : 0), 0);
 
         return new StaffOverviewResponse.Summary(

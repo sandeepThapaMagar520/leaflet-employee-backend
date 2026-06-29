@@ -6,6 +6,7 @@ import com.ems.backend.leave.dto.LeaveBalanceResponse;
 import com.ems.backend.leave.dto.LeaveRequestResponse;
 import com.ems.backend.leave.dto.UpdateLeaveBalanceRequest;
 import com.ems.backend.leave.dto.UpdateLeaveStatusRequest;
+import com.ems.backend.settings.AppSettingsService;
 import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
 import com.ems.backend.user.UserRepository;
@@ -20,20 +21,26 @@ import java.util.List;
 
 @Service
 public class LeaveRequestService {
-    private static final int ANNUAL_ALLOWANCE_DAYS = 20;
-
     private final LeaveRequestRepository repository;
     private final UserRepository userRepository;
+    private final AppSettingsService settingsService;
     private final SecurityUtils securityUtils;
 
-    public LeaveRequestService(LeaveRequestRepository repository, UserRepository userRepository, SecurityUtils securityUtils) {
+    public LeaveRequestService(
+            LeaveRequestRepository repository,
+            UserRepository userRepository,
+            AppSettingsService settingsService,
+            SecurityUtils securityUtils
+    ) {
         this.repository = repository;
         this.userRepository = userRepository;
+        this.settingsService = settingsService;
         this.securityUtils = securityUtils;
     }
 
     public LeaveRequestResponse createRequest(CreateLeaveRequest request) {
         validateDates(request.startDate(), request.endDate());
+        validateLeaveType(request.leaveType());
         User currentUser = getCurrentUser();
         if (currentUser.getRole() == Role.ADMIN) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Admins can review leave requests but cannot submit them.");
@@ -80,18 +87,23 @@ public class LeaveRequestService {
         User targetUser = userRepository.findById(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
         int approvedDays = approvedAnnualDays(targetUser);
-        targetUser.setLeaveBalanceAdjustmentDays(request.remainingDays() + approvedDays - ANNUAL_ALLOWANCE_DAYS);
+        targetUser.setLeaveBalanceAdjustmentDays(request.remainingDays() + approvedDays - settingsService.annualLeaveDays());
         User saved = userRepository.save(targetUser);
         return balanceFor(saved);
     }
 
     private LeaveBalanceResponse balanceFor(User user) {
         int approvedDays = approvedAnnualDays(user);
+        int sickApprovedDays = approvedSickDays(user);
         int annualAllowance = annualAllowance(user);
+        int sickAllowance = settingsService.sickLeaveDays();
         return new LeaveBalanceResponse(
                 annualAllowance,
                 approvedDays,
-                Math.max(annualAllowance - approvedDays, 0)
+                Math.max(annualAllowance - approvedDays, 0),
+                sickAllowance,
+                sickApprovedDays,
+                Math.max(sickAllowance - sickApprovedDays, 0)
         );
     }
 
@@ -104,8 +116,17 @@ public class LeaveRequestService {
                 .sum();
     }
 
+    private int approvedSickDays(User user) {
+        int currentYear = LocalDate.now().getYear();
+        return repository.findByUserIdAndStatus(user.getId(), LeaveStatus.APPROVED).stream()
+                .filter(request -> request.getLeaveType() == LeaveType.SICK)
+                .filter(request -> request.getStartDate().getYear() == currentYear || request.getEndDate().getYear() == currentYear)
+                .mapToInt(this::requestedDays)
+                .sum();
+    }
+
     private int annualAllowance(User user) {
-        return Math.max(ANNUAL_ALLOWANCE_DAYS + (user.getLeaveBalanceAdjustmentDays() != null ? user.getLeaveBalanceAdjustmentDays() : 0), 0);
+        return Math.max(settingsService.annualLeaveDays() + (user.getLeaveBalanceAdjustmentDays() != null ? user.getLeaveBalanceAdjustmentDays() : 0), 0);
     }
 
     public LeaveRequestResponse approve(Long requestId, UpdateLeaveStatusRequest request) {
@@ -140,7 +161,7 @@ public class LeaveRequestService {
         }
         leave.setStatus(status);
         leave.setReviewer(currentUser);
-        leave.setReviewerNote(reviewerNote);
+        leave.setReviewerNote(normalize(reviewerNote));
         leave.setReviewedAt(Instant.now());
         return map(repository.save(leave));
     }
@@ -164,8 +185,21 @@ public class LeaveRequestService {
         }
     }
 
+    private void validateLeaveType(LeaveType leaveType) {
+        if (leaveType != LeaveType.ANNUAL && leaveType != LeaveType.SICK) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only annual and sick leave are available");
+        }
+    }
+
     private int requestedDays(LeaveRequest request) {
         return (int) ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) + 1;
+    }
+
+    private String normalize(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     private LeaveRequestResponse map(LeaveRequest request) {

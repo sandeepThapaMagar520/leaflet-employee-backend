@@ -5,6 +5,7 @@ import com.ems.backend.attendance.dto.AttendanceSessionResponse;
 import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.leave.LeaveRequestRepository;
 import com.ems.backend.leave.LeaveStatus;
+import com.ems.backend.settings.AppSettingsService;
 import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
 import com.ems.backend.user.UserRepository;
@@ -30,41 +31,27 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
 public class AttendanceSessionService {
-    private static final long DEFAULT_REQUIRED_MINUTES = 7 * 60;
-    private static final long DEFAULT_GRACE_MINUTES = 6 * 60;
-    private static final long DEFAULT_STALE_SESSION_MINUTES = 14 * 60;
-    private static final long DEFAULT_HEARTBEAT_STALE_MINUTES = 10;
-
     private final AttendanceSessionRepository repository;
     private final UserRepository userRepository;
     private final LeaveRequestRepository leaveRequestRepository;
+    private final AppSettingsService settingsService;
     private final SecurityUtils securityUtils;
     private final ZoneId attendanceZone;
-    private final long requiredMinutes;
-    private final long graceMinutes;
-    private final long staleSessionMinutes;
-    private final long heartbeatStaleMinutes;
 
     public AttendanceSessionService(
             AttendanceSessionRepository repository,
             UserRepository userRepository,
             LeaveRequestRepository leaveRequestRepository,
+            AppSettingsService settingsService,
             SecurityUtils securityUtils,
-            @Value("${app.attendance.zone-id:Asia/Kathmandu}") String attendanceZoneId,
-            @Value("${app.attendance.required-minutes:" + DEFAULT_REQUIRED_MINUTES + "}") long requiredMinutes,
-            @Value("${app.attendance.grace-minutes:" + DEFAULT_GRACE_MINUTES + "}") long graceMinutes,
-            @Value("${app.attendance.stale-session-minutes:" + DEFAULT_STALE_SESSION_MINUTES + "}") long staleSessionMinutes,
-            @Value("${app.attendance.heartbeat-stale-minutes:" + DEFAULT_HEARTBEAT_STALE_MINUTES + "}") long heartbeatStaleMinutes
+            @Value("${app.attendance.zone-id:Asia/Kathmandu}") String attendanceZoneId
     ) {
         this.repository = repository;
         this.userRepository = userRepository;
         this.leaveRequestRepository = leaveRequestRepository;
+        this.settingsService = settingsService;
         this.securityUtils = securityUtils;
         this.attendanceZone = ZoneId.of(attendanceZoneId);
-        this.requiredMinutes = requiredMinutes;
-        this.graceMinutes = graceMinutes;
-        this.staleSessionMinutes = staleSessionMinutes;
-        this.heartbeatStaleMinutes = heartbeatStaleMinutes;
     }
 
     public AttendanceSessionResponse startSession() {
@@ -81,6 +68,9 @@ public class AttendanceSessionService {
         User currentUser = getCurrentUser();
         if (currentUser.getRole() != Role.ADMIN && currentUser.getRole() != Role.MANAGER) {
             throw new ResponseStatusException(FORBIDDEN, "Only admins and managers can start team sessions.");
+        }
+        if (!settingsService.attendanceAdminOverrideEnabled()) {
+            throw new ResponseStatusException(BAD_REQUEST, "Admin attendance overrides are disabled in settings.");
         }
         User targetUser = userRepository.findById(userId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
@@ -134,6 +124,9 @@ public class AttendanceSessionService {
         User currentUser = getCurrentUser();
         if (currentUser.getRole() != Role.ADMIN && currentUser.getRole() != Role.MANAGER) {
             throw new ResponseStatusException(FORBIDDEN, "Only admins and managers can close team sessions.");
+        }
+        if (!settingsService.attendanceAdminOverrideEnabled()) {
+            throw new ResponseStatusException(BAD_REQUEST, "Admin attendance overrides are disabled in settings.");
         }
 
         User targetUser = userRepository.findById(userId)
@@ -259,6 +252,8 @@ public class AttendanceSessionService {
         long totalMinutes = sessions.stream()
                 .mapToLong(session -> sessionMinutes(session, from, to, now))
                 .sum();
+        long requiredMinutes = settingsService.attendanceRequiredMinutes();
+        long graceMinutes = settingsService.attendanceGraceMinutes();
         long remainingMinutes = Math.max(requiredMinutes - totalMinutes, 0);
 
         return new AttendanceDaySummaryResponse(
@@ -316,10 +311,10 @@ public class AttendanceSessionService {
         if (noSessions) {
             return AttendanceDayStatus.NO_ACTIVITY;
         }
-        if (totalMinutes >= requiredMinutes) {
+        if (totalMinutes >= settingsService.attendanceRequiredMinutes()) {
             return AttendanceDayStatus.COMPLETED;
         }
-        if (totalMinutes >= graceMinutes) {
+        if (totalMinutes >= settingsService.attendanceGraceMinutes()) {
             return AttendanceDayStatus.COMPLETED_WITH_GRACE;
         }
         return AttendanceDayStatus.UNDER_HOURS;
@@ -327,11 +322,11 @@ public class AttendanceSessionService {
 
     private boolean isStaleSession(LocalDate workDate, Instant activeStart, Instant now) {
         LocalDate today = LocalDate.now(attendanceZone);
-        return workDate.isBefore(today) || Duration.between(activeStart, now).toMinutes() >= staleSessionMinutes;
+        return workDate.isBefore(today) || Duration.between(activeStart, now).toMinutes() >= settingsService.attendanceMissingCheckoutMinutes();
     }
 
     private boolean isHeartbeatStale(Instant lastHeartbeatAt, Instant now) {
-        return lastHeartbeatAt != null && Duration.between(lastHeartbeatAt, now).toMinutes() >= heartbeatStaleMinutes;
+        return lastHeartbeatAt != null && Duration.between(lastHeartbeatAt, now).toMinutes() >= settingsService.attendanceHeartbeatStaleMinutes();
     }
 
     private boolean isOnApprovedLeave(Long userId, LocalDate date) {
