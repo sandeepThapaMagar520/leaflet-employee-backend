@@ -6,6 +6,7 @@ import com.ems.backend.dailylog.DailyLogService;
 import com.ems.backend.dailylog.dto.DailyLogResponse;
 import com.ems.backend.leave.LeaveRequestService;
 import com.ems.backend.leave.LeaveStatus;
+import com.ems.backend.leave.LeaveType;
 import com.ems.backend.leave.dto.LeaveRequestResponse;
 import com.ems.backend.project.ProjectService;
 import com.ems.backend.project.ProjectStatus;
@@ -141,8 +142,24 @@ public class StaffOverviewService {
                         || request.endDate().getYear() == currentYear)
                 .mapToInt(LeaveRequestResponse::requestedDays)
                 .sum();
+        int approvedAnnualLeaveDays = leaveRequests.stream()
+                .filter(request -> request.status() == LeaveStatus.APPROVED)
+                .filter(request -> request.leaveType() == LeaveType.ANNUAL)
+                .filter(request -> request.startDate().getYear() == currentYear
+                        || request.endDate().getYear() == currentYear)
+                .mapToInt(LeaveRequestResponse::requestedDays)
+                .sum();
+        int approvedSickLeaveDays = leaveRequests.stream()
+                .filter(request -> request.status() == LeaveStatus.APPROVED)
+                .filter(request -> request.leaveType() == LeaveType.SICK)
+                .filter(request -> request.startDate().getYear() == currentYear
+                        || request.endDate().getYear() == currentYear)
+                .mapToInt(LeaveRequestResponse::requestedDays)
+                .sum();
         int annualLeaveAllowance = Math.max(settingsService.annualLeaveDays()
                 + (user.getLeaveBalanceAdjustmentDays() != null ? user.getLeaveBalanceAdjustmentDays() : 0), 0);
+        int sickLeaveAllowance = Math.max(settingsService.sickLeaveDays()
+                + (user.getSickLeaveBalanceAdjustmentDays() != null ? user.getSickLeaveBalanceAdjustmentDays() : 0), 0);
 
         return new StaffOverviewResponse.Summary(
                 projects.size(),
@@ -157,8 +174,12 @@ public class StaffOverviewService {
                 attendanceDays,
                 lastAttendanceAt,
                 approvedLeaveDays,
+                approvedAnnualLeaveDays,
+                approvedSickLeaveDays,
                 annualLeaveAllowance,
-                Math.max(annualLeaveAllowance - approvedLeaveDays, 0),
+                Math.max(annualLeaveAllowance - approvedAnnualLeaveDays, 0),
+                sickLeaveAllowance,
+                Math.max(sickLeaveAllowance - approvedSickLeaveDays, 0),
                 (int) leaveRequests.stream().filter(request -> request.status() == LeaveStatus.PENDING).count(),
                 dailyLogs.size(),
                 dailyLogs.stream().map(DailyLogResponse::logDate).max(LocalDate::compareTo).orElse(null)

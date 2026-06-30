@@ -86,8 +86,19 @@ public class LeaveRequestService {
         }
         User targetUser = userRepository.findById(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
-        int approvedDays = approvedAnnualDays(targetUser);
-        targetUser.setLeaveBalanceAdjustmentDays(request.remainingDays() + approvedDays - settingsService.annualLeaveDays());
+        Integer annualRemainingDays = request.annualRemainingDays() != null ? request.annualRemainingDays() : request.remainingDays();
+        Integer sickRemainingDays = request.sickRemainingDays();
+        if (annualRemainingDays == null && sickRemainingDays == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "At least one leave balance is required");
+        }
+        if (annualRemainingDays != null) {
+            int approvedDays = approvedAnnualDays(targetUser);
+            targetUser.setLeaveBalanceAdjustmentDays(annualRemainingDays + approvedDays - settingsService.annualLeaveDays());
+        }
+        if (sickRemainingDays != null) {
+            int sickApprovedDays = approvedSickDays(targetUser);
+            targetUser.setSickLeaveBalanceAdjustmentDays(sickRemainingDays + sickApprovedDays - settingsService.sickLeaveDays());
+        }
         User saved = userRepository.save(targetUser);
         return balanceFor(saved);
     }
@@ -96,7 +107,7 @@ public class LeaveRequestService {
         int approvedDays = approvedAnnualDays(user);
         int sickApprovedDays = approvedSickDays(user);
         int annualAllowance = annualAllowance(user);
-        int sickAllowance = settingsService.sickLeaveDays();
+        int sickAllowance = sickAllowance(user);
         return new LeaveBalanceResponse(
                 annualAllowance,
                 approvedDays,
@@ -127,6 +138,10 @@ public class LeaveRequestService {
 
     private int annualAllowance(User user) {
         return Math.max(settingsService.annualLeaveDays() + (user.getLeaveBalanceAdjustmentDays() != null ? user.getLeaveBalanceAdjustmentDays() : 0), 0);
+    }
+
+    private int sickAllowance(User user) {
+        return Math.max(settingsService.sickLeaveDays() + (user.getSickLeaveBalanceAdjustmentDays() != null ? user.getSickLeaveBalanceAdjustmentDays() : 0), 0);
     }
 
     public LeaveRequestResponse approve(Long requestId, UpdateLeaveStatusRequest request) {

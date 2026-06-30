@@ -32,8 +32,12 @@ public record StaffOverviewResponse(
             int attendanceDaysLast30Days,
             Instant lastAttendanceAt,
             int approvedLeaveDaysThisYear,
+            int approvedAnnualLeaveDaysThisYear,
+            int approvedSickLeaveDaysThisYear,
             int annualLeaveAllowance,
             int remainingLeaveDays,
+            int sickLeaveAllowance,
+            int sickRemainingLeaveDays,
             int pendingLeaveRequests,
             int dailyLogCount,
             LocalDate latestDailyLogDate

@@ -82,6 +82,9 @@ public class User {
     @Column(name = "leave_balance_adjustment_days", nullable = false)
     private Integer leaveBalanceAdjustmentDays = 0;
 
+    @Column(name = "sick_leave_balance_adjustment_days", nullable = false)
+    private Integer sickLeaveBalanceAdjustmentDays = 0;
+
     @Column(name = "password_changed_at")
     private Instant passwordChangedAt;
 
