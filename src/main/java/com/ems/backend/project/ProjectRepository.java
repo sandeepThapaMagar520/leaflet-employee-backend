@@ -36,7 +36,7 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
             @Param("canAddNotes") boolean canAddNotes
     );
 
-    @Query("select p from Project p join fetch p.manager join fetch p.createdBy order by p.createdAt desc")
+    @Query("select distinct p from Project p join fetch p.manager join fetch p.createdBy left join fetch p.assignedEmployees order by p.createdAt desc")
     List<Project> findAllWithDetails();
 
     @Query("select p from Project p join fetch p.manager join fetch p.createdBy left join fetch p.assignedEmployees where p.id = :id")
@@ -51,4 +51,15 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
             order by p.createdAt desc
             """)
     List<Project> findAllAccessibleToUser(Long userId);
+
+    @Query("""
+            select distinct p from Project p
+            join fetch p.manager
+            join fetch p.createdBy
+            left join fetch p.assignedEmployees ae
+            where p.manager.id = :userId
+               or ae.id = :userId
+            order by p.createdAt desc
+            """)
+    List<Project> findAllForStaffMember(Long userId);
 }

@@ -12,6 +12,7 @@ import com.ems.backend.user.User;
 import com.ems.backend.user.UserRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
@@ -20,6 +21,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Service
+@Transactional
 public class LeaveRequestService {
     private final LeaveRequestRepository repository;
     private final UserRepository userRepository;
@@ -62,6 +64,14 @@ public class LeaveRequestService {
                 ? repository.findAllByOrderByCreatedAtDesc()
                 : repository.findByUserEmailIgnoreCaseOrderByCreatedAtDesc(currentUser.getEmail());
         return requests.stream().map(this::map).toList();
+    }
+
+    public List<LeaveRequestResponse> getRequestsForUser(Long userId) {
+        User currentUser = getCurrentUser();
+        if (!canReview(currentUser) && !currentUser.getId().equals(userId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can view only your own leave requests");
+        }
+        return repository.findByUserIdOrderByCreatedAtDesc(userId).stream().map(this::map).toList();
     }
 
     public LeaveBalanceResponse getMyBalance() {

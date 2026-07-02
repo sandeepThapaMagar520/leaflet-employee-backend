@@ -18,6 +18,7 @@ import com.ems.backend.task.dto.TaskResponse;
 import com.ems.backend.user.dto.StaffOverviewResponse;
 import com.ems.backend.user.dto.StaffAuditEventResponse;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
@@ -65,26 +66,16 @@ public class StaffOverviewService {
         this.userService = userService;
     }
 
+    @Transactional(readOnly = true)
     public StaffOverviewResponse getOverview(Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Staff member not found"));
 
-        List<ProjectResponse> projects = projectService.getAllProjects().stream()
-                .filter(project -> userId.equals(project.managerId())
-                        || project.assignedEmployees().stream().anyMatch(employee -> userId.equals(employee.id())))
-                .toList();
-        List<TaskResponse> tasks = taskService.getAllTasks().stream()
-                .filter(task -> userId.equals(task.assignedToId()))
-                .toList();
-        List<AttendanceSessionResponse> attendance = attendanceSessionService.getAllSessions().stream()
-                .filter(session -> userId.equals(session.userId()))
-                .toList();
-        List<LeaveRequestResponse> leaveRequests = leaveRequestService.listRequests().stream()
-                .filter(request -> userId.equals(request.userId()))
-                .toList();
-        List<DailyLogResponse> dailyLogs = dailyLogService.getAllLogs().stream()
-                .filter(log -> userId.equals(log.userId()))
-                .toList();
+        List<ProjectResponse> projects = projectService.getProjectsForStaff(userId);
+        List<TaskResponse> tasks = taskService.getTasksByAssignee(userId);
+        List<AttendanceSessionResponse> attendance = attendanceSessionService.getSessionsByUser(userId);
+        List<LeaveRequestResponse> leaveRequests = leaveRequestService.getRequestsForUser(userId);
+        List<DailyLogResponse> dailyLogs = dailyLogService.getLogsByUser(userId);
 
         return new StaffOverviewResponse(
                 userService.map(user),

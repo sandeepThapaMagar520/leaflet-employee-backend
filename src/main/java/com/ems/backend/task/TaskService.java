@@ -96,7 +96,7 @@ public class TaskService {
     public List<TaskResponse> getAllTasks() {
         User currentUser = getCurrentUser();
         List<Task> tasks = switch (currentUser.getRole()) {
-            case ADMIN -> taskRepository.findAll();
+            case ADMIN -> taskRepository.findAllWithDetails();
             case MANAGER -> taskRepository.findByProjectManagerId(currentUser.getId());
             case EMPLOYEE -> taskRepository.findByAssignedToEmailIgnoreCase(currentUser.getEmail());
         };
@@ -117,6 +117,11 @@ public class TaskService {
     public List<TaskResponse> getMyTasks() {
         String email = securityUtils.getCurrentUserEmail();
         return taskRepository.findByAssignedToEmailIgnoreCase(email).stream().map(this::map).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<TaskResponse> getTasksByAssignee(Long userId) {
+        return taskRepository.findByAssignedToIdWithDetails(userId).stream().map(this::map).toList();
     }
 
     public TaskResponse updateTask(Long taskId, UpdateTaskRequest request) {
@@ -235,7 +240,7 @@ public class TaskService {
     }
 
     private Task getTaskById(Long taskId) {
-        return taskRepository.findById(taskId)
+        return taskRepository.findByIdWithDetails(taskId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Task not found"));
     }
 

@@ -137,6 +137,15 @@ public class ProjectService {
         return mapForUser(project, currentUser);
     }
 
+    @Transactional(readOnly = true)
+    public List<ProjectResponse> getProjectsForStaff(Long userId) {
+        User currentUser = getCurrentUser();
+        return projectRepository.findAllForStaffMember(userId).stream()
+                .filter(project -> currentUser.getRole() == Role.ADMIN || projectAccessService.canAccessProject(currentUser, project))
+                .map(project -> mapForUser(project, currentUser))
+                .toList();
+    }
+
     public ProjectResponse updateProject(Long projectId, UpdateProjectRequest request) {
         User currentUser = getCurrentUser();
         Project project = projectAccessService.requireManageableProject(projectId, currentUser);

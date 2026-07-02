@@ -11,6 +11,7 @@ import com.ems.backend.user.User;
 import com.ems.backend.user.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
@@ -30,6 +31,7 @@ import static org.springframework.http.HttpStatus.FORBIDDEN;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
+@Transactional
 public class AttendanceSessionService {
     private final AttendanceSessionRepository repository;
     private final UserRepository userRepository;
@@ -153,6 +155,10 @@ public class AttendanceSessionService {
                 .filter(session -> session.getUser().getRole() != Role.ADMIN)
                 .map(this::map)
                 .toList();
+    }
+
+    public List<AttendanceSessionResponse> getSessionsByUser(Long userId) {
+        return repository.findByUserIdOrderByStartTimeDesc(userId).stream().map(this::map).toList();
     }
 
     public AttendanceDaySummaryResponse getMyTodaySummary() {

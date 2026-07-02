@@ -8,6 +8,7 @@ import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
 import com.ems.backend.user.UserRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
@@ -17,6 +18,7 @@ import static org.springframework.http.HttpStatus.FORBIDDEN;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
+@Transactional
 public class DailyLogService {
     private final DailyLogRepository repository;
     private final UserRepository userRepository;
@@ -56,6 +58,10 @@ public class DailyLogService {
                 .filter(log -> log.getUser().getRole() != Role.ADMIN)
                 .map(this::map)
                 .toList();
+    }
+
+    public List<DailyLogResponse> getLogsByUser(Long userId) {
+        return repository.findByUserIdOrderByLogDateDesc(userId).stream().map(this::map).toList();
     }
 
     public DailyLogResponse updateLog(Long logId, UpdateDailyLogRequest request) {

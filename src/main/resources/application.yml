@@ -16,6 +16,7 @@ spring:
       connection-test-query: SELECT 1
       validation-timeout: 3000
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: validate
     show-sql: ${SHOW_SQL:false}
