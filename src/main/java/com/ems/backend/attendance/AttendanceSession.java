@@ -38,6 +38,10 @@ public class AttendanceSession {
     @Column(name = "break_minutes", nullable = false)
     private Integer breakMinutes = 0;
 
+    @Version
+    @Column(nullable = false)
+    private long version;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 

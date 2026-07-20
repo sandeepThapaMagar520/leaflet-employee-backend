@@ -23,14 +23,18 @@ spring:
     properties:
       hibernate:
         format_sql: false
+        jdbc:
+          time_zone: UTC
   servlet:
     multipart:
       max-file-size: 10MB
-      max-request-size: 12MB
+      max-request-size: 11MB
+      file-size-threshold: 0B
   flyway:
     enabled: true
     locations: classpath:db/migration
 app:
+  environment: ${APP_ENVIRONMENT:development}
   cors:
     allowed-origin-patterns: ${ALLOWED_ORIGIN_PATTERNS:http://localhost:3000,http://localhost:3001}
   mail:
@@ -44,13 +48,52 @@ app:
     zone-id: ${ATTENDANCE_ZONE_ID:Asia/Kathmandu}
     required-minutes: ${ATTENDANCE_REQUIRED_MINUTES:420}
     grace-minutes: ${ATTENDANCE_GRACE_MINUTES:360}
+  policy:
+    leave:
+      # False preserves the application's existing inclusive calendar-day behavior.
+      exclude-weekends: ${LEAVE_EXCLUDE_WEEKENDS:false}
+    attendance:
+      max-session-minutes: ${ATTENDANCE_MAX_SESSION_MINUTES:1440}
+      correction-deadline-days: ${ATTENDANCE_CORRECTION_DEADLINE_DAYS:30}
   security:
     jwt:
-      secret: ${JWT_SECRET:replace_this_with_minimum_32_characters_secret}
-      expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+      secret: ${JWT_SECRET:}
+      expiration-ms: ${JWT_EXPIRATION_MS:900000}
+      issuer: ${JWT_ISSUER:leaflet-ems}
+      audience: ${JWT_AUDIENCE:leaflet-ems-web}
+      key-id: ${JWT_KEY_ID:local-development-key}
+    otp:
+      validity-seconds: ${OTP_VALIDITY_SECONDS:600}
+      reset-token-validity-seconds: ${RESET_TOKEN_VALIDITY_SECONDS:600}
+      resend-cooldown-seconds: ${OTP_RESEND_COOLDOWN_SECONDS:60}
+      maximum-verification-attempts: ${OTP_MAX_VERIFICATION_ATTEMPTS:5}
+      account-issuance-limit-per-hour: ${OTP_ACCOUNT_ISSUANCE_LIMIT_PER_HOUR:5}
+      ip-issuance-limit-per-hour: ${OTP_IP_ISSUANCE_LIMIT_PER_HOUR:20}
+      account-issuance-limit-per-day: ${OTP_ACCOUNT_ISSUANCE_LIMIT_PER_DAY:10}
+      account-verification-limit-per-fifteen-minutes: ${OTP_ACCOUNT_VERIFICATION_LIMIT_PER_15_MINUTES:20}
+      ip-verification-limit-per-fifteen-minutes: ${OTP_IP_VERIFICATION_LIMIT_PER_15_MINUTES:60}
+    emergency-admin-bootstrap:
+      enabled: ${EMERGENCY_ADMIN_BOOTSTRAP_ENABLED:false}
+      email: ${EMERGENCY_ADMIN_BOOTSTRAP_EMAIL:}
+      full-name: ${EMERGENCY_ADMIN_BOOTSTRAP_FULL_NAME:Emergency Administrator}
+      password: ${EMERGENCY_ADMIN_BOOTSTRAP_PASSWORD:}
   cloudinary:
     cloud-name: ${CLOUDINARY_CLOUD_NAME:}
-    upload-preset: ${CLOUDINARY_UPLOAD_PRESET:}
+    api-key: ${CLOUDINARY_API_KEY:}
+    api-secret: ${CLOUDINARY_API_SECRET:}
+  media:
+    user-hourly-limit: ${MEDIA_USER_HOURLY_LIMIT:30}
+    ip-hourly-limit: ${MEDIA_IP_HOURLY_LIMIT:80}
+    pending-limit: ${MEDIA_PENDING_LIMIT:5}
+    stored-bytes-per-purpose: ${MEDIA_STORED_BYTES_PER_PURPOSE:104857600}
+    private-download-ttl-seconds: ${MEDIA_PRIVATE_DOWNLOAD_TTL_SECONDS:120}
+    cleanup-cron: "${MEDIA_CLEANUP_CRON:0 17 * * * *}"
+    scanner:
+      enabled: ${MEDIA_SCANNER_ENABLED:false}
+      host: ${MEDIA_SCANNER_HOST:localhost}
+      port: ${MEDIA_SCANNER_PORT:3310}
+      connect-timeout-ms: ${MEDIA_SCANNER_CONNECT_TIMEOUT_MS:2000}
+      read-timeout-ms: ${MEDIA_SCANNER_READ_TIMEOUT_MS:15000}
 
 server:
   port: ${PORT:8080}

@@ -7,8 +7,10 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 public interface ProjectRepository extends JpaRepository<Project, Long> {
+    Optional<Project> findByDocumentMediaAssetId(UUID mediaAssetId);
     @Query(value = """
             SELECT COALESCE(can_manage_tasks, FALSE)
             FROM project_assignments

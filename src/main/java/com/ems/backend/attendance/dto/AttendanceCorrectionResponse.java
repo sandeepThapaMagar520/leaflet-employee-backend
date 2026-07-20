@@ -18,6 +18,7 @@ public record AttendanceCorrectionResponse(
         String reviewerFullName,
         String reviewerNote,
         Instant reviewedAt,
-        Instant createdAt
+        Instant createdAt,
+        boolean canReview
 ) {
 }

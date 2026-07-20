@@ -73,6 +73,23 @@ class ProjectAccessServiceTest {
     }
 
     @Test
+    void managerAssignedAsOrdinaryMemberCanAccessButCannotManageOrSeeFinances() {
+        User memberManager = user(5L, Role.MANAGER);
+        project.setAssignedEmployees(Set.of(employee, memberManager));
+
+        assertTrue(projectAccessService.canAccessProject(memberManager, project));
+        assertFalse(projectAccessService.canManageProject(memberManager, project));
+        assertFalse(projectAccessService.canViewProjectFinancials(memberManager, project));
+        assertFalse(projectAccessService.canRecordProjectPayment(memberManager, project));
+    }
+
+    @Test
+    void projectManagerCanViewFinancesAndRecordPayments() {
+        assertTrue(projectAccessService.canViewProjectFinancials(manager, project));
+        assertTrue(projectAccessService.canRecordProjectPayment(manager, project));
+    }
+
+    @Test
     void unassignedEmployeeCannotAccessProject() {
         assertFalse(projectAccessService.canAccessProject(outsider, project));
     }

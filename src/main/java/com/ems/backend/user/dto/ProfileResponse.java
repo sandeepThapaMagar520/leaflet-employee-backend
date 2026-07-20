@@ -5,6 +5,7 @@ import com.ems.backend.user.EmploymentType;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 public record ProfileResponse(
         Long id,
@@ -13,6 +14,8 @@ public record ProfileResponse(
         Role role,
         Boolean active,
         String profilePhotoUrl,
+        UUID profileMediaAssetId,
+        String profilePhotoLegacyStatus,
         String employeeId,
         LocalDate joiningDate,
         EmploymentType employmentType,

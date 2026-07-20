@@ -31,6 +31,9 @@ public class ProjectNote {
     @JoinColumn(name = "created_by_id")
     private User createdBy;
 
+    @Column(name = "legacy_attachment_status", nullable = false)
+    private String legacyAttachmentStatus = "NONE";
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 

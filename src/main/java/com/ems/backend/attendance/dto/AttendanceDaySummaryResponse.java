@@ -16,5 +16,7 @@ public record AttendanceDaySummaryResponse(
         long requiredMinutes,
         long graceMinutes,
         long remainingMinutes,
+        long overtimeMinutes,
+        long shortfallMinutes,
         AttendanceDayStatus status
 ) {}

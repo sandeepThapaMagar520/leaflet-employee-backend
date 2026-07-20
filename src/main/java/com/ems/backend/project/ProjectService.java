@@ -3,8 +3,14 @@ package com.ems.backend.project;
 import com.ems.backend.common.PageResponse;
 import com.ems.backend.common.ProjectAccessService;
 import com.ems.backend.common.SecurityUtils;
+import com.ems.backend.authorization.AuthorizationPolicyService;
+import com.ems.backend.media.MediaAsset;
+import com.ems.backend.media.MediaAttachmentService;
+import com.ems.backend.media.UploadPurpose;
 import com.ems.backend.notification.NotificationService;
 import com.ems.backend.notification.NotificationType;
+import com.ems.backend.security.RequestMetadata;
+import com.ems.backend.security.SecurityAuditService;
 import com.ems.backend.project.dto.*;
 import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
@@ -12,12 +18,17 @@ import com.ems.backend.user.UserRepository;
 import com.ems.backend.task.Task;
 import com.ems.backend.task.TaskRepository;
 import com.ems.backend.task.TaskStatus;
+import com.ems.backend.task.TaskCommentRepository;
+import com.ems.backend.time.BusinessClock;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.UUID;
 import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -29,11 +40,6 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 @Service
 @Transactional
 public class ProjectService {
-    private static final Set<String> PAYMENT_ATTACHMENT_TYPES = Set.of(
-            "application/pdf",
-            "image/jpeg",
-            "image/png"
-    );
     private final ProjectRepository projectRepository;
     private final UserRepository userRepository;
     private final TaskRepository taskRepository;
@@ -44,6 +50,13 @@ public class ProjectService {
     private final SecurityUtils securityUtils;
     private final ProjectAccessService projectAccessService;
     private final NotificationService notificationService;
+    private final SecurityAuditService auditService;
+    private final AuthorizationPolicyService authorizationPolicy;
+    private final ProjectNoteMediaAttachmentRepository noteMediaAttachmentRepository;
+    private final MediaAttachmentService mediaAttachmentService;
+    private final TaskCommentRepository taskCommentRepository;
+    private final ProjectTransitionPolicy transitionPolicy;
+    private final BusinessClock businessClock;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -55,7 +68,14 @@ public class ProjectService {
             ProjectTaskBoardRepository projectTaskBoardRepository,
             SecurityUtils securityUtils,
             ProjectAccessService projectAccessService,
-            NotificationService notificationService
+            NotificationService notificationService,
+            SecurityAuditService auditService,
+            AuthorizationPolicyService authorizationPolicy,
+            ProjectNoteMediaAttachmentRepository noteMediaAttachmentRepository,
+            MediaAttachmentService mediaAttachmentService,
+            TaskCommentRepository taskCommentRepository,
+            ProjectTransitionPolicy transitionPolicy,
+            BusinessClock businessClock
     ) {
         this.projectRepository = projectRepository;
         this.userRepository = userRepository;
@@ -67,6 +87,13 @@ public class ProjectService {
         this.securityUtils = securityUtils;
         this.projectAccessService = projectAccessService;
         this.notificationService = notificationService;
+        this.auditService = auditService;
+        this.authorizationPolicy = authorizationPolicy;
+        this.noteMediaAttachmentRepository = noteMediaAttachmentRepository;
+        this.mediaAttachmentService = mediaAttachmentService;
+        this.taskCommentRepository = taskCommentRepository;
+        this.transitionPolicy = transitionPolicy;
+        this.businessClock = businessClock;
     }
 
     public ProjectResponse createProject(CreateProjectRequest request) {
@@ -89,16 +116,30 @@ public class ProjectService {
         project.setManager(manager);
         project.setCreatedBy(currentUser);
         project.setClientNotes(request.clientNotes());
-        project.setDocumentUrl(request.documentUrl());
         project.setBudgetAmount(request.budgetAmount() != null ? request.budgetAmount() : BigDecimal.ZERO);
         project.setInternalNotes(request.internalNotes());
 
-        Project saved = projectRepository.save(project);
+        Project saved = projectRepository.saveAndFlush(project);
+        if (request.documentMediaAssetId() != null) {
+            MediaAsset document = mediaAttachmentService.attach(
+                    request.documentMediaAssetId(),
+                    UploadPurpose.PROJECT_ATTACHMENT,
+                    currentUser,
+                    currentUser,
+                    "PROJECT",
+                    saved.getId().toString()
+            );
+            saved.setDocumentMediaAsset(document);
+            saved.setDocumentUrl(null);
+            saved.setDocumentLegacyStatus("NONE");
+            saved = projectRepository.save(saved);
+        }
         createDefaultTaskBoards(saved);
 
         if (request.assignedEmployeeIds() != null) {
             Set<User> employees = request.assignedEmployeeIds().stream()
                     .map(this::getUserById)
+                    .peek(employee -> requireAssignableProjectMember(currentUser, employee))
                     .collect(Collectors.toSet());
             saved.setAssignedEmployees(employees);
             notifyNewlyAssignedEmployees(saved, Set.of(), employees);
@@ -107,7 +148,7 @@ public class ProjectService {
             applyMemberPermissions(saved.getId(), employees, request.memberPermissions());
         }
 
-        return map(saved);
+        return mapForUser(saved, currentUser);
     }
 
     @Transactional(readOnly = true)
@@ -149,6 +190,7 @@ public class ProjectService {
     public ProjectResponse updateProject(Long projectId, UpdateProjectRequest request) {
         User currentUser = getCurrentUser();
         Project project = projectAccessService.requireManageableProject(projectId, currentUser);
+        transitionPolicy.requireMutable(project);
 
         User manager = getUserById(request.managerId());
         if (manager.getRole() != Role.MANAGER && manager.getRole() != Role.ADMIN) {
@@ -158,6 +200,8 @@ public class ProjectService {
             throw new ResponseStatusException(FORBIDDEN, "Managers cannot transfer projects to another manager");
         }
 
+        ProjectStatus previousStatus = project.getStatus();
+        transitionPolicy.requireTransition(previousStatus, request.status());
         project.setName(request.name());
         project.setDescription(request.description());
         project.setStatus(request.status());
@@ -165,7 +209,28 @@ public class ProjectService {
         project.setDueDate(request.dueDate());
         project.setManager(manager);
         project.setClientNotes(request.clientNotes());
-        project.setDocumentUrl(request.documentUrl());
+        if (request.documentMediaAssetId() != null
+                && (project.getDocumentMediaAsset() == null
+                || !request.documentMediaAssetId().equals(
+                        project.getDocumentMediaAsset().getId()
+                ))) {
+            MediaAsset previous = project.getDocumentMediaAsset();
+            MediaAsset document = mediaAttachmentService.attach(
+                    request.documentMediaAssetId(),
+                    UploadPurpose.PROJECT_ATTACHMENT,
+                    currentUser,
+                    currentUser,
+                    "PROJECT",
+                    project.getId().toString()
+            );
+            project.setDocumentMediaAsset(document);
+            project.setDocumentUrl(null);
+            project.setDocumentLegacyStatus("NONE");
+            projectRepository.saveAndFlush(project);
+            mediaAttachmentService.deleteAttached(
+                    previous, currentUser, "PROJECT_DOCUMENT_REPLACED"
+            );
+        }
         if (request.budgetAmount() != null) {
             project.setBudgetAmount(request.budgetAmount());
         }
@@ -177,6 +242,7 @@ public class ProjectService {
                     .collect(Collectors.toSet());
             Set<User> employees = request.assignedEmployeeIds().stream()
                     .map(this::getUserById)
+                    .peek(employee -> requireAssignableProjectMember(currentUser, employee))
                     .collect(Collectors.toSet());
             project.setAssignedEmployees(employees);
             notifyNewlyAssignedEmployees(project, previousIds, employees);
@@ -185,12 +251,46 @@ public class ProjectService {
             applyMemberPermissions(project.getId(), employees, request.memberPermissions());
         }
 
-        return map(projectRepository.save(project));
+        Project saved = projectRepository.save(project);
+        if (previousStatus != saved.getStatus()) {
+            auditService.recordWithDetails(
+                    currentUser.getId(),
+                    saved.getManager().getId(),
+                    saved.getStatus() == ProjectStatus.COMPLETED ? "PROJECT_COMPLETED" : "PROJECT_STATUS_CHANGED",
+                    "SUCCESS",
+                    "AUTHORIZED_PROJECT_MANAGER",
+                    "projectId=" + saved.getId() + ",from=" + previousStatus + ",to=" + saved.getStatus(),
+                    saved.getManager().getEmail(),
+                    RequestMetadata.current()
+            );
+        }
+        return mapForUser(saved, currentUser);
     }
 
     public void deleteProject(Long projectId) {
         User currentUser = getCurrentUser();
-        projectAccessService.requireManageableProject(projectId, currentUser);
+        Project project = projectAccessService.requireManageableProject(projectId, currentUser);
+        mediaAttachmentService.deleteAttached(
+                project.getDocumentMediaAsset(), currentUser, "PARENT_PROJECT_DELETED"
+        );
+        projectNoteRepository.findAllByProjectIdWithCreatorOrderByCreatedAtDesc(projectId)
+                .forEach(note -> noteMediaAttachmentRepository
+                        .findByNoteIdOrderByDisplayOrder(note.getId())
+                        .forEach(link -> mediaAttachmentService.deleteAttached(
+                                link.getMediaAsset(), currentUser, "PARENT_PROJECT_DELETED"
+                        )));
+        projectPaymentRepository.findAllByProjectIdWithCreatorOrderByPaidAtDesc(projectId)
+                .forEach(payment -> payment.getAttachments().forEach(
+                        attachment -> mediaAttachmentService.deleteAttached(
+                                attachment.getMediaAsset(), currentUser, "PARENT_PROJECT_DELETED"
+                        )
+                ));
+        taskRepository.findByProjectId(projectId).forEach(task ->
+                taskCommentRepository.findByTaskIdOrderByCreatedAtDesc(task.getId())
+                        .forEach(comment -> mediaAttachmentService.deleteAttached(
+                                comment.getMediaAsset(), currentUser, "PARENT_PROJECT_DELETED"
+                        ))
+        );
         projectRepository.deleteById(projectId);
     }
 
@@ -207,6 +307,7 @@ public class ProjectService {
     public ProjectTaskBoardResponse createTaskBoard(Long projectId, CreateProjectTaskBoardRequest request) {
         User currentUser = getCurrentUser();
         Project project = projectAccessService.requireManageableProject(projectId, currentUser);
+        transitionPolicy.requireMutable(project);
         ensureDefaultTaskBoards(projectId);
 
         String name = request.name().trim();
@@ -236,7 +337,8 @@ public class ProjectService {
 
     public List<ProjectTaskBoardResponse> reorderTaskBoards(Long projectId, ReorderProjectTaskBoardsRequest request) {
         User currentUser = getCurrentUser();
-        projectAccessService.requireManageableProject(projectId, currentUser);
+        Project project = projectAccessService.requireManageableProject(projectId, currentUser);
+        transitionPolicy.requireMutable(project);
         ensureDefaultTaskBoards(projectId);
 
         List<ProjectTaskBoard> boards = projectTaskBoardRepository.findByProjectIdOrderByDisplayOrderAscIdAsc(projectId);
@@ -262,10 +364,7 @@ public class ProjectService {
 
     public List<PaymentResponse> listPayments(Long projectId) {
         User currentUser = getCurrentUser();
-        if (!projectAccessService.canViewFinancials(currentUser)) {
-            throw new ResponseStatusException(FORBIDDEN, "You do not have permission to view project finances");
-        }
-        projectAccessService.requireAccessibleProject(projectId, currentUser);
+        projectAccessService.requireFinanciallyVisibleProject(projectId, currentUser);
         return projectPaymentRepository.findAllByProjectIdWithCreatorOrderByPaidAtDesc(projectId).stream()
                 .map(this::mapPayment)
                 .toList();
@@ -273,18 +372,34 @@ public class ProjectService {
 
     public PaymentResponse addPayment(Long projectId, CreatePaymentRequest request) {
         User currentUser = getCurrentUser();
-        Project project = projectAccessService.requireAccessibleProject(projectId, currentUser);
-        if (!projectAccessService.canViewFinancials(currentUser)) {
-            throw new ResponseStatusException(FORBIDDEN, "You do not have permission to manage project finances");
+        Project project = projectAccessService.requirePaymentManageableProject(projectId, currentUser);
+        if (request.idempotencyKey() != null) {
+            ProjectPayment existing = projectPaymentRepository
+                    .findByProjectIdAndIdempotencyKey(projectId, request.idempotencyKey())
+                    .orElse(null);
+            if (existing != null) {
+                return mapPayment(existing);
+            }
+        }
+        if (request.paidAt().isAfter(businessClock.now().plusSeconds(300))) {
+            throw new ResponseStatusException(BAD_REQUEST, "Payment date cannot be in the future");
+        }
+        if (project.getStartDate() != null
+                && request.paidAt().atZone(businessClock.zoneId()).toLocalDate().isBefore(project.getStartDate())) {
+            throw new ResponseStatusException(BAD_REQUEST, "Payment date cannot be before the project start date");
         }
         ProjectPayment payment = new ProjectPayment();
         payment.setProject(project);
         payment.setAmount(request.amount());
         payment.setPaidAt(request.paidAt());
         payment.setReferenceNote(request.referenceNote());
+        payment.setIdempotencyKey(request.idempotencyKey());
         payment.setCreatedBy(currentUser);
+        projectPaymentRepository.saveAndFlush(payment);
         replacePaymentAttachments(payment, request.attachments());
-        return mapPayment(projectPaymentRepository.save(payment));
+        ProjectPayment saved = projectPaymentRepository.save(payment);
+        auditPayment(currentUser, project, saved, "PROJECT_PAYMENT_CREATED");
+        return mapPayment(saved);
     }
 
     public PaymentResponse updatePaymentAttachments(
@@ -293,11 +408,13 @@ public class ProjectService {
             UpdatePaymentAttachmentsRequest request
     ) {
         User currentUser = getCurrentUser();
-        projectAccessService.requireManageableProject(projectId, currentUser);
-        ProjectPayment payment = projectPaymentRepository.findByIdAndProjectIdWithCreator(paymentId, projectId)
+        Project project = projectAccessService.requirePaymentManageableProject(projectId, currentUser);
+        ProjectPayment payment = projectPaymentRepository.findByIdAndProjectIdForAttachmentUpdate(paymentId, projectId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Payment not found"));
         replacePaymentAttachments(payment, request.attachments());
-        return mapPayment(projectPaymentRepository.save(payment));
+        ProjectPayment saved = projectPaymentRepository.save(payment);
+        auditPayment(currentUser, project, saved, "PROJECT_PAYMENT_ATTACHMENTS_UPDATED");
+        return mapPayment(saved);
     }
 
     public List<ProjectNoteResponse> listNotes(Long projectId, ProjectNoteType type) {
@@ -337,7 +454,24 @@ public class ProjectService {
         note.setContent(request.content());
         note.setNoteType(request.noteType());
         note.setCreatedBy(currentUser);
-        return mapNote(projectNoteRepository.save(note));
+        ProjectNote saved = projectNoteRepository.saveAndFlush(note);
+        int order = 0;
+        for (UUID mediaAssetId : request.mediaAssetIds()) {
+            MediaAsset asset = mediaAttachmentService.attach(
+                    mediaAssetId,
+                    UploadPurpose.PROJECT_ATTACHMENT,
+                    currentUser,
+                    currentUser,
+                    "PROJECT_NOTE",
+                    saved.getId().toString()
+            );
+            ProjectNoteMediaAttachment attachment = new ProjectNoteMediaAttachment();
+            attachment.setNote(saved);
+            attachment.setMediaAsset(asset);
+            attachment.setDisplayOrder(order++);
+            noteMediaAttachmentRepository.save(attachment);
+        }
+        return mapNote(saved);
     }
 
     public ProjectNoteResponse updateNote(Long noteId, UpdateProjectNoteRequest request) {
@@ -362,6 +496,10 @@ public class ProjectService {
         if (!projectAccessService.canManageNotes(currentUser, project)) {
             throw new ResponseStatusException(FORBIDDEN, "Only admins and the project manager can delete notes");
         }
+        noteMediaAttachmentRepository.findByNoteIdOrderByDisplayOrder(noteId)
+                .forEach(attachment -> mediaAttachmentService.deleteAttached(
+                        attachment.getMediaAsset(), currentUser, "PROJECT_NOTE_DELETED"
+                ));
         projectNoteRepository.delete(note);
     }
 
@@ -415,12 +553,28 @@ public class ProjectService {
     }
 
     private ProjectNoteResponse mapNote(ProjectNote note) {
+        List<ProjectNoteResponse.Attachment> attachments =
+                noteMediaAttachmentRepository.findByNoteIdOrderByDisplayOrder(note.getId())
+                        .stream()
+                        .map(link -> {
+                            MediaAsset asset = link.getMediaAsset();
+                            return new ProjectNoteResponse.Attachment(
+                                    asset.getId(),
+                                    asset.getOriginalFilename(),
+                                    asset.getDetectedMimeType(),
+                                    asset.getSizeBytes(),
+                                    "/api/v1/media/assets/" + asset.getId() + "/download"
+                            );
+                        })
+                        .toList();
         return new ProjectNoteResponse(
                 note.getId(),
                 note.getContent(),
                 note.getNoteType(),
                 note.getCreatedBy().getFullName(),
-                note.getCreatedAt()
+                note.getCreatedAt(),
+                attachments,
+                note.getLegacyAttachmentStatus()
         );
     }
 
@@ -434,9 +588,14 @@ public class ProjectService {
                 payment.getAttachments().stream()
                         .map(attachment -> new PaymentAttachmentResponse(
                                 attachment.getId(),
-                                attachment.getFileUrl(),
+                                attachment.getMediaAsset() == null
+                                        ? null : attachment.getMediaAsset().getId(),
+                                attachment.getMediaAsset() == null
+                                        ? null : "/api/v1/media/assets/"
+                                        + attachment.getMediaAsset().getId() + "/download",
                                 attachment.getFileName(),
-                                attachment.getFileType()
+                                attachment.getFileType(),
+                                attachment.getLegacyAssetStatus()
                         ))
                         .toList()
         );
@@ -449,19 +608,48 @@ public class ProjectService {
         List<PaymentAttachmentRequest> attachments = requestedAttachments != null
                 ? requestedAttachments
                 : List.of();
-        for (PaymentAttachmentRequest attachment : attachments) {
-            if (!PAYMENT_ATTACHMENT_TYPES.contains(attachment.fileType())) {
-                throw new ResponseStatusException(BAD_REQUEST, "Payment bills must be PDF, JPG, or PNG files");
-            }
+        Set<UUID> requestedIds = attachments.stream()
+                .map(PaymentAttachmentRequest::mediaAssetId)
+                .collect(Collectors.toCollection(HashSet::new));
+        if (requestedIds.size() != attachments.size()) {
+            throw new ResponseStatusException(BAD_REQUEST, "Duplicate payment attachments are not allowed");
         }
-
-        payment.getAttachments().clear();
+        User actor = getCurrentUser();
+        Map<UUID, ProjectPaymentAttachment> existing = payment.getAttachments().stream()
+                .filter(value -> value.getMediaAsset() != null)
+                .collect(Collectors.toMap(
+                        value -> value.getMediaAsset().getId(),
+                        value -> value
+                ));
+        payment.getAttachments().removeIf(value -> {
+            UUID mediaId = value.getMediaAsset() == null ? null : value.getMediaAsset().getId();
+            if (mediaId != null && requestedIds.contains(mediaId)) {
+                return false;
+            }
+            mediaAttachmentService.deleteAttached(
+                    value.getMediaAsset(), actor, "PAYMENT_ATTACHMENT_REMOVED"
+            );
+            return true;
+        });
         for (PaymentAttachmentRequest request : attachments) {
+            if (existing.containsKey(request.mediaAssetId())) {
+                continue;
+            }
+            MediaAsset asset = mediaAttachmentService.attach(
+                    request.mediaAssetId(),
+                    UploadPurpose.PAYMENT_ATTACHMENT,
+                    actor,
+                    actor,
+                    "PROJECT_PAYMENT",
+                    payment.getId().toString()
+            );
             ProjectPaymentAttachment attachment = new ProjectPaymentAttachment();
             attachment.setPayment(payment);
-            attachment.setFileUrl(request.fileUrl().trim());
-            attachment.setFileName(request.fileName().trim());
-            attachment.setFileType(request.fileType());
+            attachment.setMediaAsset(asset);
+            attachment.setFileUrl(null);
+            attachment.setFileName(asset.getOriginalFilename());
+            attachment.setFileType(asset.getDetectedMimeType());
+            attachment.setLegacyAssetStatus("NONE");
             payment.getAttachments().add(attachment);
         }
     }
@@ -473,6 +661,22 @@ public class ProjectService {
 
     private User getCurrentUser() {
         return securityUtils.getCurrentUser();
+    }
+
+    private void requireAssignableProjectMember(User actor, User employee) {
+        if (!Boolean.TRUE.equals(employee.getActive()) || employee.getRole() == Role.ADMIN) {
+            throw new ResponseStatusException(
+                    BAD_REQUEST,
+                    "Project members must be active employees or managers"
+            );
+        }
+        if (actor.getRole() == Role.MANAGER
+                && !authorizationPolicy.canViewEmployeeDirectoryEntry(actor, employee)) {
+            throw new ResponseStatusException(
+                    FORBIDDEN,
+                    "Managers may assign only employees in their reporting scope"
+            );
+        }
     }
 
     private void notifyNewlyAssignedEmployees(Project project, Set<Long> previousIds, Set<User> employees) {
@@ -490,15 +694,12 @@ public class ProjectService {
     }
 
     private ProjectResponse mapForUser(Project project, User viewer) {
-        boolean canViewFinancials = projectAccessService.canViewFinancials(viewer);
-        return map(project, canViewFinancials);
+        boolean canViewFinancials =
+                projectAccessService.canViewProjectFinancials(viewer, project);
+        return map(project, viewer, canViewFinancials);
     }
 
-    private ProjectResponse map(Project project) {
-        return map(project, true);
-    }
-
-    private ProjectResponse map(Project project, boolean includeFinancials) {
+    private ProjectResponse map(Project project, User viewer, boolean includeFinancials) {
         List<Task> tasks = taskRepository.findByProjectId(project.getId());
         int progress = 0;
         if (!tasks.isEmpty()) {
@@ -538,15 +739,41 @@ public class ProjectService {
                         .toList(),
                 project.getClientNotes(),
                 includeFinancials ? project.getInternalNotes() : null,
-                project.getDocumentUrl(),
-                includeFinancials ? project.getBudgetAmount() : BigDecimal.ZERO,
-                totalPaid,
+                project.getDocumentMediaAsset() == null
+                        ? null : project.getDocumentMediaAsset().getId(),
+                project.getDocumentMediaAsset() == null
+                        ? null : "/api/v1/media/assets/"
+                        + project.getDocumentMediaAsset().getId() + "/download",
+                project.getDocumentLegacyStatus(),
+                includeFinancials ? project.getBudgetAmount() : null,
+                includeFinancials ? totalPaid : null,
                 lastAmount,
                 lastAt,
                 lastNote,
+                projectAccessService.canManageProject(viewer, project),
+                includeFinancials,
+                projectAccessService.canRecordProjectPayment(viewer, project),
                 progress,
                 project.getCreatedAt(),
                 project.getUpdatedAt()
+        );
+    }
+
+    private void auditPayment(
+            User actor,
+            Project project,
+            ProjectPayment payment,
+            String eventType
+    ) {
+        auditService.recordWithDetails(
+                actor.getId(),
+                null,
+                eventType,
+                "SUCCESS",
+                "PROJECT_FINANCIAL_OPERATION",
+                "projectId=%d,paymentId=%d".formatted(project.getId(), payment.getId()),
+                null,
+                RequestMetadata.current()
         );
     }
 

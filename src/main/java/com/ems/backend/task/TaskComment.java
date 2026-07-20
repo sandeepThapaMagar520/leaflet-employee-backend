@@ -1,5 +1,6 @@
 package com.ems.backend.task;
 
+import com.ems.backend.media.MediaAsset;
 import com.ems.backend.user.User;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -30,6 +31,13 @@ public class TaskComment {
     private String attachmentUrl;
 
     private String attachmentName;
+
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "media_asset_id")
+    private MediaAsset mediaAsset;
+
+    @Column(name = "legacy_asset_status", nullable = false)
+    private String legacyAssetStatus = "NONE";
 
     @Column(nullable = false, updatable = false)
     private Instant createdAt;

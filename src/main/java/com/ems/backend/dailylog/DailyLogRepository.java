@@ -15,6 +15,19 @@ public interface DailyLogRepository extends JpaRepository<DailyLog, Long> {
     @Query("select log from DailyLog log join fetch log.user order by log.logDate desc")
     List<DailyLog> findAllByOrderByLogDateDesc();
 
+    @Query("""
+            select log from DailyLog log join fetch log.user
+            where log.user.id = :managerId
+               or exists (
+                select scope.id from ManagerEmployeeScope scope
+                where scope.manager.id = :managerId
+                  and scope.employee.id = log.user.id
+                  and scope.active = true
+            )
+            order by log.logDate desc
+            """)
+    List<DailyLog> findVisibleToManager(Long managerId);
+
     @Query("select log from DailyLog log join fetch log.user where log.user.id = :userId order by log.logDate desc")
     List<DailyLog> findByUserIdOrderByLogDateDesc(Long userId);
 

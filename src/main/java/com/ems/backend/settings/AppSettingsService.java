@@ -75,6 +75,10 @@ public class AppSettingsService {
         return getInt(LEAVE_SICK_DAYS, 12);
     }
 
+    public int leaveResetMonth() {
+        return Math.min(Math.max(getInt(LEAVE_RESET_MONTH, 1), 1), 12);
+    }
+
     public int attendanceRequiredMinutes() {
         return getInt(ATTENDANCE_REQUIRED_MINUTES, 420);
     }

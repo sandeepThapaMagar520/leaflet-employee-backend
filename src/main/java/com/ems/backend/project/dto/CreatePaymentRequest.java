@@ -8,11 +8,13 @@ import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 public record CreatePaymentRequest(
         @NotNull @DecimalMin(value = "0.01", inclusive = true) BigDecimal amount,
         @NotNull Instant paidAt,
         String referenceNote,
-        @Size(max = 5) List<@Valid PaymentAttachmentRequest> attachments
+        @Size(max = 5) List<@Valid PaymentAttachmentRequest> attachments,
+        UUID idempotencyKey
 ) {
 }

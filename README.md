@@ -41,16 +41,38 @@ Create a Render Web Service from this repository.
 Required environment variables:
 
 ```bash
+APP_ENVIRONMENT=production
 DB_URL=jdbc:postgresql://db.<project-ref>.supabase.co:5432/postgres?sslmode=require
-DB_USERNAME=postgres.<project-ref>
+DB_USERNAME=postgres
 DB_PASSWORD=<supabase_db_password>
 JWT_SECRET=<minimum_32_character_secret>
-JWT_EXPIRATION_MS=86400000
-ALLOWED_ORIGIN_PATTERNS=http://localhost:3000,https://<your-frontend-domain>
+JWT_EXPIRATION_MS=900000
+JWT_ISSUER=leaflet-ems-production
+JWT_AUDIENCE=leaflet-ems-web-production
+JWT_KEY_ID=<stable-signing-key-identifier>
+ALLOWED_ORIGIN_PATTERNS=https://<your-frontend-domain>
 CLOUDINARY_CLOUD_NAME=<your_cloud_name>
-CLOUDINARY_UPLOAD_PRESET=<your_unsigned_upload_preset>
+CLOUDINARY_API_KEY=<your_cloudinary_api_key>
+CLOUDINARY_API_SECRET=<your_cloudinary_api_secret>
+MEDIA_SCANNER_ENABLED=true
+MEDIA_SCANNER_HOST=<private_clamav_host>
 SHOW_SQL=false
 ```
+
+Production startup fails closed when critical database, JWT, CORS, email, or
+upload configuration is missing or unsafe. The seeded-account incident
+response, V33 verification, JWT rotation, and one-time emergency administrator
+procedure are documented in
+[`docs/phase-0-production-containment.md`](docs/phase-0-production-containment.md).
+The access-token, OTP, password-recovery, session-revocation, rollout, and
+operator behavior introduced in Phase 1 is documented in
+[`docs/phase-1-authentication-session-security.md`](docs/phase-1-authentication-session-security.md).
+
+Access tokens are intentionally short-lived (15 minutes by default). Changing
+a password, completing recovery, changing an email, disabling an account, or
+revoking sessions invalidates previously issued tokens. The browser currently
+stores the access token in `sessionStorage`; a refresh-cookie migration remains
+a later staged change.
 
 Google Apps Script email settings (verification, OTP, and notification emails):
 

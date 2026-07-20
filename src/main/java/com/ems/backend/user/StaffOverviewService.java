@@ -17,6 +17,10 @@ import com.ems.backend.task.TaskStatus;
 import com.ems.backend.task.dto.TaskResponse;
 import com.ems.backend.user.dto.StaffOverviewResponse;
 import com.ems.backend.user.dto.StaffAuditEventResponse;
+import com.ems.backend.authorization.AuthorizationPolicyService;
+import com.ems.backend.common.SecurityUtils;
+import com.ems.backend.security.RequestMetadata;
+import com.ems.backend.security.SecurityAuditService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -41,6 +45,9 @@ public class StaffOverviewService {
     private final StaffDocumentRepository staffDocumentRepository;
     private final StaffAuditEventRepository staffAuditEventRepository;
     private final UserService userService;
+    private final SecurityUtils securityUtils;
+    private final AuthorizationPolicyService authorizationPolicy;
+    private final SecurityAuditService auditService;
 
     public StaffOverviewService(
             UserRepository userRepository,
@@ -52,7 +59,10 @@ public class StaffOverviewService {
             DailyLogService dailyLogService,
             StaffDocumentRepository staffDocumentRepository,
             StaffAuditEventRepository staffAuditEventRepository,
-            UserService userService
+            UserService userService,
+            SecurityUtils securityUtils,
+            AuthorizationPolicyService authorizationPolicy,
+            SecurityAuditService auditService
     ) {
         this.userRepository = userRepository;
         this.projectService = projectService;
@@ -64,12 +74,22 @@ public class StaffOverviewService {
         this.staffDocumentRepository = staffDocumentRepository;
         this.staffAuditEventRepository = staffAuditEventRepository;
         this.userService = userService;
+        this.securityUtils = securityUtils;
+        this.authorizationPolicy = authorizationPolicy;
+        this.auditService = auditService;
     }
 
     @Transactional(readOnly = true)
     public StaffOverviewResponse getOverview(Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Staff member not found"));
+        User actor = securityUtils.getCurrentUser();
+        if (!authorizationPolicy.canViewEmployeePrivateProfile(actor, user)) {
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "You do not have permission to view this private staff record."
+            );
+        }
 
         List<ProjectResponse> projects = projectService.getProjectsForStaff(userId);
         List<TaskResponse> tasks = taskService.getTasksByAssignee(userId);
@@ -77,7 +97,7 @@ public class StaffOverviewService {
         List<LeaveRequestResponse> leaveRequests = leaveRequestService.getRequestsForUser(userId);
         List<DailyLogResponse> dailyLogs = dailyLogService.getLogsByUser(userId);
 
-        return new StaffOverviewResponse(
+        StaffOverviewResponse response = new StaffOverviewResponse(
                 userService.map(user),
                 buildSummary(user, projects, tasks, attendance, leaveRequests, dailyLogs),
                 projects,
@@ -98,6 +118,12 @@ public class StaffOverviewService {
                         ))
                         .toList()
         );
+        auditService.record(
+                actor.getId(), user.getId(), "PRIVATE_STAFF_RECORD_VIEWED", "SUCCESS",
+                actor.getRole() == Role.ADMIN ? "ADMIN_ACCESS" : "SELF_ACCESS",
+                user.getEmail(), RequestMetadata.current()
+        );
+        return response;
     }
 
     private StaffOverviewResponse.Summary buildSummary(

@@ -19,10 +19,16 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final CustomUserDetailsService userDetailsService;
+    private final ApiErrorWriter errorWriter;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter, CustomUserDetailsService userDetailsService) {
+    public SecurityConfig(
+            JwtAuthenticationFilter jwtAuthenticationFilter,
+            CustomUserDetailsService userDetailsService,
+            ApiErrorWriter errorWriter
+    ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.userDetailsService = userDetailsService;
+        this.errorWriter = errorWriter;
     }
 
     @Bean
@@ -49,10 +55,22 @@ public class SecurityConfig {
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) -> {
-                            response.sendError(jakarta.servlet.http.HttpServletResponse.SC_UNAUTHORIZED, "Unauthorized");
+                            errorWriter.write(
+                                    request,
+                                    response,
+                                    jakarta.servlet.http.HttpServletResponse.SC_UNAUTHORIZED,
+                                    "AUTHENTICATION_REQUIRED",
+                                    "Authentication is required."
+                            );
                         })
                         .accessDeniedHandler((request, response, accessDeniedException) -> {
-                            response.sendError(jakarta.servlet.http.HttpServletResponse.SC_FORBIDDEN, "Forbidden");
+                            errorWriter.write(
+                                    request,
+                                    response,
+                                    jakarta.servlet.http.HttpServletResponse.SC_FORBIDDEN,
+                                    "ACCESS_DENIED",
+                                    "You do not have permission for this action."
+                            );
                         }))
                 .authenticationProvider(authenticationProvider())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)

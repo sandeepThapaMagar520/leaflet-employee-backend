@@ -47,6 +47,10 @@ public class LeaveRequest {
 
     private Instant reviewedAt;
 
+    @Version
+    @Column(nullable = false)
+    private long version;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 

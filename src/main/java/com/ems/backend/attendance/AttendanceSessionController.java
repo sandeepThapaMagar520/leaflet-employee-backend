@@ -5,6 +5,7 @@ import com.ems.backend.attendance.dto.AttendanceSessionResponse;
 import com.ems.backend.attendance.dto.AttendanceCorrectionResponse;
 import com.ems.backend.attendance.dto.CreateAttendanceCorrectionRequest;
 import com.ems.backend.attendance.dto.ReviewAttendanceCorrectionRequest;
+import com.ems.backend.attendance.dto.AttendanceOverrideRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -38,8 +39,11 @@ public class AttendanceSessionController {
     @PostMapping("/users/{userId}/active/start")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "Start a team member's work session")
-    public AttendanceSessionResponse startUserActiveSession(@PathVariable Long userId) {
-        return service.startUserActiveSession(userId);
+    public AttendanceSessionResponse startUserActiveSession(
+            @PathVariable Long userId,
+            @Valid @RequestBody AttendanceOverrideRequest request
+    ) {
+        return service.startUserActiveSession(userId, request.reason());
     }
 
     @PostMapping("/end")
@@ -73,8 +77,11 @@ public class AttendanceSessionController {
     @PatchMapping("/users/{userId}/active/end")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "Stop a team member's active work session")
-    public AttendanceSessionResponse endUserActiveSession(@PathVariable Long userId) {
-        return service.endUserActiveSession(userId);
+    public AttendanceSessionResponse endUserActiveSession(
+            @PathVariable Long userId,
+            @Valid @RequestBody AttendanceOverrideRequest request
+    ) {
+        return service.endUserActiveSession(userId, request.reason());
     }
 
     @GetMapping("/me/today")

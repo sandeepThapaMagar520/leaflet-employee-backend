@@ -1,9 +1,13 @@
 package com.ems.backend.project.dto;
 
+import java.util.UUID;
+
 public record PaymentAttachmentResponse(
         Long id,
-        String fileUrl,
+        UUID mediaAssetId,
+        String downloadUrl,
         String fileName,
-        String fileType
+        String fileType,
+        String legacyAssetStatus
 ) {
 }

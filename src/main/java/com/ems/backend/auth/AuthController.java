@@ -14,9 +14,11 @@ import com.ems.backend.auth.dto.VerifyEmailRequest;
 import com.ems.backend.auth.dto.VerifyEmailChange;
 import com.ems.backend.auth.dto.VerifyPasswordOtpRequest;
 import com.ems.backend.user.UserProfileService;
+import com.ems.backend.security.RequestMetadata;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -47,71 +49,100 @@ public class AuthController {
 
     @PostMapping("/login")
     @Operation(summary = "Login", description = "Returns a JWT access token and authenticated user details.")
-    public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
-        return ResponseEntity.ok(authService.login(request));
+    public ResponseEntity<AuthResponse> login(
+            @Valid @RequestBody LoginRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        return ResponseEntity.ok(authService.login(request, RequestMetadata.from(servletRequest)));
     }
 
     @PostMapping("/start-account-setup")
     @Operation(summary = "Start first-time account setup", description = "Validates the administrator-issued temporary password, then emails a setup OTP.")
     public ResponseEntity<Map<String, String>> startAccountSetup(
-            @Valid @RequestBody StartAccountSetupRequest request
+            @Valid @RequestBody StartAccountSetupRequest request,
+            HttpServletRequest servletRequest
     ) {
-        authService.startAccountSetup(request);
+        authService.startAccountSetup(request, RequestMetadata.from(servletRequest));
         return ResponseEntity.ok(Map.of("message", "Temporary password accepted. A six-digit OTP was sent to your email."));
     }
 
     @PostMapping("/change-password")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "Change current password", description = "Authenticated users can update their password after confirming the current password.")
-    public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
-        authService.changePassword(request);
+    public ResponseEntity<Void> changePassword(
+            @Valid @RequestBody ChangePasswordRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        authService.changePassword(request, RequestMetadata.from(servletRequest));
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/change-email/request")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "Request email change", description = "Sends an OTP to the requested new email address.")
-    public ResponseEntity<Map<String, String>> requestEmailChange(@Valid @RequestBody RequestEmailChange request) {
-        authService.requestEmailChange(request);
+    public ResponseEntity<Map<String, String>> requestEmailChange(
+            @Valid @RequestBody RequestEmailChange request,
+            HttpServletRequest servletRequest
+    ) {
+        authService.requestEmailChange(request, RequestMetadata.from(servletRequest));
         return ResponseEntity.ok(Map.of("message", "A verification OTP was sent to the new email address."));
     }
 
     @PostMapping("/change-email/verify")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "Verify email change", description = "Changes the account email after the new address OTP is verified.")
-    public ResponseEntity<AuthResponse> verifyEmailChange(@Valid @RequestBody VerifyEmailChange request) {
-        return ResponseEntity.ok(authService.verifyEmailChange(request));
+    public ResponseEntity<AuthResponse> verifyEmailChange(
+            @Valid @RequestBody VerifyEmailChange request,
+            HttpServletRequest servletRequest
+    ) {
+        return ResponseEntity.ok(authService.verifyEmailChange(
+                request,
+                RequestMetadata.from(servletRequest)
+        ));
     }
 
     @PostMapping("/forgot-password")
     @Operation(summary = "Request password OTP", description = "Emails an OTP for first-time account setup or forgotten-password recovery.")
-    public ResponseEntity<Map<String, String>> forgotPassword(@Valid @RequestBody PasswordResetRequest request) {
-        authService.requestPasswordReset(request);
+    public ResponseEntity<Map<String, String>> forgotPassword(
+            @Valid @RequestBody PasswordResetRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        authService.requestPasswordReset(request, RequestMetadata.from(servletRequest));
         return ResponseEntity.ok(Map.of(
                 "message",
-                "If an active account exists for that email, a password OTP has been sent."
+                "If the account is eligible, a password OTP will be sent. Delivery can take a few minutes."
         ));
     }
 
     @PostMapping("/verify-password-otp")
     @Operation(summary = "Verify password OTP", description = "Verifies the emailed OTP before allowing a new password.")
     public ResponseEntity<OtpVerificationResponse> verifyPasswordOtp(
-            @Valid @RequestBody VerifyPasswordOtpRequest request
+            @Valid @RequestBody VerifyPasswordOtpRequest request,
+            HttpServletRequest servletRequest
     ) {
-        return ResponseEntity.ok(authService.verifyPasswordOtp(request));
+        return ResponseEntity.ok(authService.verifyPasswordOtp(
+                request,
+                RequestMetadata.from(servletRequest)
+        ));
     }
 
     @PostMapping("/set-password")
     @Operation(summary = "Set password", description = "Creates a new password using the short-lived token returned after OTP verification.")
-    public ResponseEntity<Map<String, String>> setPassword(@Valid @RequestBody SetPasswordRequest request) {
-        authService.setPassword(request);
+    public ResponseEntity<Map<String, String>> setPassword(
+            @Valid @RequestBody SetPasswordRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        authService.setPassword(request, RequestMetadata.from(servletRequest));
         return ResponseEntity.ok(Map.of("message", "Password saved. You can now sign in."));
     }
 
     @PostMapping("/verify-email")
     @Operation(summary = "Verify email", description = "Confirms a user's email address using the token from the verification email.")
-    public ResponseEntity<Map<String, String>> verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
-        userProfileService.verifyEmail(request.token());
+    public ResponseEntity<Map<String, String>> verifyEmail(
+            @Valid @RequestBody VerifyEmailRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        userProfileService.verifyEmail(request.token(), RequestMetadata.from(servletRequest));
         return ResponseEntity.ok(Map.of("message", "Email verified successfully."));
     }
 

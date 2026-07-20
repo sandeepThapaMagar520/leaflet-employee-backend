@@ -2,33 +2,32 @@ package com.ems.backend.task;
 
 import com.ems.backend.notification.NotificationService;
 import com.ems.backend.notification.NotificationType;
-import org.springframework.beans.factory.annotation.Value;
+import com.ems.backend.time.BusinessClock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
-import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 
 @Service
 public class TaskReminderService {
     private final TaskRepository taskRepository;
     private final NotificationService notificationService;
-    private final ZoneId businessZone;
+    private final BusinessClock businessClock;
 
     public TaskReminderService(
             TaskRepository taskRepository,
             NotificationService notificationService,
-            @Value("${app.attendance.zone-id:Asia/Kathmandu}") String businessZoneId
+            BusinessClock businessClock
     ) {
         this.taskRepository = taskRepository;
         this.notificationService = notificationService;
-        this.businessZone = ZoneId.of(businessZoneId);
+        this.businessClock = businessClock;
     }
 
     @Scheduled(cron = "0 0 8 * * *")
     public void sendDueDateReminders() {
-        LocalDate today = LocalDate.now(businessZone);
+        LocalDate today = businessClock.today();
         LocalDate tomorrow = today.plusDays(1);
 
         for (Task task : taskRepository.findByStatusNotAndDueDateIsNotNull(TaskStatus.DONE.name())) {

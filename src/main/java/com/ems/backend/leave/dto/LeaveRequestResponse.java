@@ -19,5 +19,6 @@ public record LeaveRequestResponse(
         String reviewerName,
         String reviewerNote,
         Instant reviewedAt,
-        Instant createdAt
+        Instant createdAt,
+        boolean canReview
 ) {}

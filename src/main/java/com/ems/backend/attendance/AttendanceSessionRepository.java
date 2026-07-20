@@ -1,11 +1,14 @@
 package com.ems.backend.attendance;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface AttendanceSessionRepository extends JpaRepository<AttendanceSession, Long> {
@@ -15,8 +18,44 @@ public interface AttendanceSessionRepository extends JpaRepository<AttendanceSes
     @Query("select session from AttendanceSession session join fetch session.user where session.user.id = :userId and session.endTime is null")
     List<AttendanceSession> findByUserIdAndEndTimeIsNull(Long userId);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select session from AttendanceSession session where session.user.id = :userId and session.endTime is null")
+    Optional<AttendanceSession> findActiveByUserIdForUpdate(Long userId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select session from AttendanceSession session where session.id = :id")
+    Optional<AttendanceSession> findByIdForUpdate(Long id);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select session from AttendanceSession session
+            where session.user.id = :userId
+              and session.id <> :excludedSessionId
+              and session.startTime < :endTime
+              and (session.endTime is null or session.endTime > :startTime)
+            order by session.id
+            """)
+    List<AttendanceSession> findOverlappingForUpdate(
+            Long userId,
+            Long excludedSessionId,
+            Instant startTime,
+            Instant endTime
+    );
+
     @Query("select session from AttendanceSession session join fetch session.user order by session.startTime desc")
     List<AttendanceSession> findAllByOrderByStartTimeDesc();
+
+    @Query("""
+            select session from AttendanceSession session join fetch session.user
+            where exists (
+                select scope.id from ManagerEmployeeScope scope
+                where scope.manager.id = :managerId
+                  and scope.employee.id = session.user.id
+                  and scope.active = true
+            )
+            order by session.startTime desc
+            """)
+    List<AttendanceSession> findVisibleToManager(Long managerId);
 
     @Query("select session from AttendanceSession session join fetch session.user where session.user.id = :userId order by session.startTime desc")
     List<AttendanceSession> findByUserIdOrderByStartTimeDesc(Long userId);
@@ -37,4 +76,17 @@ public interface AttendanceSessionRepository extends JpaRepository<AttendanceSes
             order by session.startTime asc
             """)
     List<AttendanceSession> findSessionsOverlappingDay(Instant from, Instant to);
+
+    @Query("""
+            select session from AttendanceSession session join fetch session.user
+            where session.user.id in :userIds
+              and session.startTime < :to
+              and (session.endTime is null or session.endTime >= :from)
+            order by session.startTime asc
+            """)
+    List<AttendanceSession> findSessionsOverlappingDayForUsers(
+            List<Long> userIds,
+            Instant from,
+            Instant to
+    );
 }

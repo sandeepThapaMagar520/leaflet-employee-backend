@@ -6,7 +6,11 @@ import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.notification.NotificationService;
 import com.ems.backend.notification.NotificationType;
 import com.ems.backend.project.Project;
+import com.ems.backend.project.ProjectStatus;
 import com.ems.backend.project.ProjectTaskBoardRepository;
+import com.ems.backend.media.MediaAsset;
+import com.ems.backend.media.MediaAttachmentService;
+import com.ems.backend.media.UploadPurpose;
 import com.ems.backend.task.dto.CreateTaskRequest;
 import com.ems.backend.task.dto.CreateTaskCommentRequest;
 import com.ems.backend.task.dto.TaskCommentResponse;
@@ -16,13 +20,14 @@ import com.ems.backend.task.dto.UpdateTaskStatusRequest;
 import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
 import com.ems.backend.user.UserRepository;
-import org.springframework.beans.factory.annotation.Value;
+import com.ems.backend.security.RequestMetadata;
+import com.ems.backend.security.SecurityAuditService;
+import com.ems.backend.time.BusinessClock;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
-import java.time.ZoneId;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -41,7 +46,10 @@ public class TaskService {
     private final ProjectAccessService projectAccessService;
     private final NotificationService notificationService;
     private final ProjectTaskBoardRepository projectTaskBoardRepository;
-    private final ZoneId businessZone;
+    private final MediaAttachmentService mediaAttachmentService;
+    private final BusinessClock businessClock;
+    private final TaskTransitionPolicy transitionPolicy;
+    private final SecurityAuditService auditService;
 
     public TaskService(
             TaskRepository taskRepository,
@@ -51,7 +59,10 @@ public class TaskService {
             ProjectAccessService projectAccessService,
             NotificationService notificationService,
             ProjectTaskBoardRepository projectTaskBoardRepository,
-            @Value("${app.attendance.zone-id:Asia/Kathmandu}") String businessZoneId
+            MediaAttachmentService mediaAttachmentService,
+            BusinessClock businessClock,
+            TaskTransitionPolicy transitionPolicy,
+            SecurityAuditService auditService
     ) {
         this.taskRepository = taskRepository;
         this.taskCommentRepository = taskCommentRepository;
@@ -60,12 +71,16 @@ public class TaskService {
         this.projectAccessService = projectAccessService;
         this.notificationService = notificationService;
         this.projectTaskBoardRepository = projectTaskBoardRepository;
-        this.businessZone = ZoneId.of(businessZoneId);
+        this.mediaAttachmentService = mediaAttachmentService;
+        this.businessClock = businessClock;
+        this.transitionPolicy = transitionPolicy;
+        this.auditService = auditService;
     }
 
     public TaskResponse createTask(CreateTaskRequest request) {
         User currentUser = getCurrentUser();
         Project project = projectAccessService.requireTaskManageableProject(request.projectId(), currentUser);
+        requireMutableProject(project);
         User assignee = getUserById(request.assignedToId());
         requireAssignableTaskUser(assignee);
         requireProjectTeamMember(project, assignee);
@@ -83,7 +98,7 @@ public class TaskService {
         task.setCreatedBy(currentUser);
 
         Task saved = taskRepository.save(task);
-        notificationService.notifyUser(
+        notificationService.notifyUserDatabaseOnly(
                 assignee,
                 NotificationType.TASK_ASSIGNED,
                 "New task assigned",
@@ -128,6 +143,7 @@ public class TaskService {
         Task task = getTaskById(taskId);
         User currentUser = getCurrentUser();
         Project project = projectAccessService.requireTaskManageableProject(task.getProject().getId(), currentUser);
+        requireMutableProject(project);
         User assignee = getUserById(request.assignedToId());
         Long previousAssigneeId = task.getAssignedTo().getId();
 
@@ -135,6 +151,8 @@ public class TaskService {
         requireProjectTeamMember(project, assignee);
         validateDueDate(request.dueDate());
 
+        transitionPolicy.requireTransition(project, task.getStatus(), request.status(), true);
+        String previousStatus = task.getStatus();
         task.setTitle(request.title());
         task.setDescription(request.description());
         requireProjectBoard(project, request.status());
@@ -144,8 +162,9 @@ public class TaskService {
         task.setAssignedTo(assignee);
 
         Task saved = taskRepository.save(task);
+        auditStatusChange(currentUser, saved, previousStatus);
         if (!previousAssigneeId.equals(assignee.getId())) {
-            notificationService.notifyUser(
+            notificationService.notifyUserDatabaseOnly(
                     assignee,
                     NotificationType.TASK_ASSIGNED,
                     "Task reassigned to you",
@@ -159,20 +178,33 @@ public class TaskService {
     public TaskResponse updateTaskStatus(Long taskId, UpdateTaskStatusRequest request) {
         Task task = getTaskById(taskId);
         User currentUser = getCurrentUser();
-        projectAccessService.requireAccessibleProject(task.getProject().getId(), currentUser);
+        Project project =
+                projectAccessService.requireAccessibleProject(task.getProject().getId(), currentUser);
+        requireMutableProject(project);
 
-        if (currentUser.getRole() == Role.EMPLOYEE && !task.getAssignedTo().getId().equals(currentUser.getId())) {
-            throw new ResponseStatusException(FORBIDDEN, "Employees can update only their own tasks");
+        boolean ownsTask = task.getAssignedTo().getId().equals(currentUser.getId());
+        if (!ownsTask && !projectAccessService.canManageTasks(currentUser, project)) {
+            throw new ResponseStatusException(
+                    FORBIDDEN,
+                    "You can update only your own tasks unless project task management is granted"
+            );
         }
 
         requireProjectBoard(task.getProject(), request.status());
         String previousStatus = task.getStatus();
+        transitionPolicy.requireTransition(
+                project,
+                previousStatus,
+                request.status(),
+                projectAccessService.canManageTasks(currentUser, project)
+        );
         task.setStatus(request.status());
         Task saved = taskRepository.save(task);
+        auditStatusChange(currentUser, saved, previousStatus);
 
         if (!TaskStatus.DONE.name().equals(previousStatus) && TaskStatus.DONE.name().equals(saved.getStatus())
                 && !saved.getCreatedBy().getId().equals(currentUser.getId())) {
-            notificationService.notifyUser(
+            notificationService.notifyUserDatabaseOnly(
                     saved.getCreatedBy(),
                     NotificationType.TASK_COMPLETED,
                     "Task completed",
@@ -186,7 +218,12 @@ public class TaskService {
     public void deleteTask(Long taskId) {
         Task task = getTaskById(taskId);
         User currentUser = getCurrentUser();
-        projectAccessService.requireTaskManageableProject(task.getProject().getId(), currentUser);
+        Project project = projectAccessService.requireTaskManageableProject(task.getProject().getId(), currentUser);
+        requireMutableProject(project);
+        taskCommentRepository.findByTaskIdOrderByCreatedAtDesc(taskId)
+                .forEach(comment -> mediaAttachmentService.deleteAttached(
+                        comment.getMediaAsset(), currentUser, "PARENT_TASK_DELETED"
+                ));
         taskRepository.delete(task);
     }
 
@@ -204,18 +241,32 @@ public class TaskService {
         Task task = getTaskById(taskId);
         User currentUser = getCurrentUser();
         projectAccessService.requireAccessibleProject(task.getProject().getId(), currentUser);
+        requireMutableProject(task.getProject());
 
         TaskComment comment = new TaskComment();
         comment.setTask(task);
         comment.setUser(currentUser);
         comment.setContent(request.content());
-        comment.setAttachmentUrl(request.attachmentUrl());
-        comment.setAttachmentName(request.attachmentName());
-        TaskComment saved = taskCommentRepository.save(comment);
+        TaskComment saved = taskCommentRepository.saveAndFlush(comment);
+        if (request.mediaAssetId() != null) {
+            MediaAsset asset = mediaAttachmentService.attach(
+                    request.mediaAssetId(),
+                    UploadPurpose.TASK_ATTACHMENT,
+                    currentUser,
+                    currentUser,
+                    "TASK_COMMENT",
+                    saved.getId().toString()
+            );
+            saved.setMediaAsset(asset);
+            saved.setAttachmentUrl(null);
+            saved.setAttachmentName(asset.getOriginalFilename());
+            saved.setLegacyAssetStatus("NONE");
+            saved = taskCommentRepository.save(saved);
+        }
 
         Set<User> mentionedUsers = resolveMentionedUsers(task.getProject(), request.mentionedUserIds(), currentUser);
         for (User mentionedUser : mentionedUsers) {
-            notificationService.notifyUser(
+            notificationService.notifyUserDatabaseOnly(
                     mentionedUser,
                     NotificationType.TASK_COMMENTED,
                     "You were mentioned",
@@ -227,7 +278,7 @@ public class TaskService {
         boolean assigneeAlreadyMentioned = mentionedUsers.stream()
                 .anyMatch(user -> user.getId().equals(task.getAssignedTo().getId()));
         if (!assigneeAlreadyMentioned && !task.getAssignedTo().getId().equals(currentUser.getId())) {
-            notificationService.notifyUser(
+            notificationService.notifyUserDatabaseOnly(
                     task.getAssignedTo(),
                     NotificationType.TASK_COMMENTED,
                     "New task comment",
@@ -269,9 +320,35 @@ public class TaskService {
     }
 
     private void validateDueDate(LocalDate dueDate) {
-        if (dueDate != null && dueDate.isBefore(LocalDate.now(businessZone))) {
+        if (dueDate != null && dueDate.isBefore(businessClock.today())) {
             throw new ResponseStatusException(BAD_REQUEST, "Due date must be today or a future date");
         }
+    }
+
+    private void requireMutableProject(Project project) {
+        if (project.getStatus() == ProjectStatus.COMPLETED) {
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "Tasks on a completed project are read-only"
+            );
+        }
+    }
+
+    private void auditStatusChange(User actor, Task task, String previousStatus) {
+        if (previousStatus.equals(task.getStatus())) return;
+        String eventType = "DONE".equals(task.getStatus())
+                ? "TASK_COMPLETED"
+                : ("DONE".equals(previousStatus) ? "TASK_REOPENED" : "TASK_STATUS_CHANGED");
+        auditService.recordWithDetails(
+                actor.getId(),
+                task.getAssignedTo().getId(),
+                eventType,
+                "SUCCESS",
+                "AUTHORIZED_TASK_TRANSITION",
+                "taskId=" + task.getId() + ",from=" + previousStatus + ",to=" + task.getStatus(),
+                task.getAssignedTo().getEmail(),
+                RequestMetadata.current()
+        );
     }
 
     private void requireProjectBoard(Project project, String status) {
@@ -325,8 +402,11 @@ public class TaskService {
                 comment.getUser().getId(),
                 comment.getUser().getFullName(),
                 comment.getContent(),
-                comment.getAttachmentUrl(),
+                comment.getMediaAsset() == null ? null : comment.getMediaAsset().getId(),
+                comment.getMediaAsset() == null
+                        ? null : "/api/v1/media/assets/" + comment.getMediaAsset().getId() + "/download",
                 comment.getAttachmentName(),
+                comment.getLegacyAssetStatus(),
                 comment.getCreatedAt()
         );
     }

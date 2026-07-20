@@ -1,5 +1,6 @@
 package com.ems.backend.user;
 
+import com.ems.backend.media.MediaAsset;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -10,6 +11,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import lombok.Getter;
@@ -37,8 +39,15 @@ public class StaffDocument {
     @Column(name = "file_name", nullable = false)
     private String fileName;
 
-    @Column(name = "file_url", nullable = false, length = 1000)
+    @Column(name = "file_url", length = 1000)
     private String fileUrl;
+
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "media_asset_id")
+    private MediaAsset mediaAsset;
+
+    @Column(name = "legacy_asset_status", nullable = false)
+    private String legacyAssetStatus = "NONE";
 
     @Column(columnDefinition = "TEXT")
     private String note;

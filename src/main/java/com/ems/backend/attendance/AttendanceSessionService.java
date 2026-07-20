@@ -3,31 +3,32 @@ package com.ems.backend.attendance;
 import com.ems.backend.attendance.dto.AttendanceDaySummaryResponse;
 import com.ems.backend.attendance.dto.AttendanceSessionResponse;
 import com.ems.backend.common.SecurityUtils;
+import com.ems.backend.authorization.AuthorizationPolicyService;
 import com.ems.backend.leave.LeaveRequestRepository;
 import com.ems.backend.leave.LeaveStatus;
 import com.ems.backend.settings.AppSettingsService;
 import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
 import com.ems.backend.user.UserRepository;
+import com.ems.backend.security.RequestMetadata;
+import com.ems.backend.security.SecurityAuditService;
+import com.ems.backend.time.BusinessClock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneId;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
-import static org.springframework.http.HttpStatus.FORBIDDEN;
+import static org.springframework.http.HttpStatus.CONFLICT;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
@@ -38,7 +39,11 @@ public class AttendanceSessionService {
     private final LeaveRequestRepository leaveRequestRepository;
     private final AppSettingsService settingsService;
     private final SecurityUtils securityUtils;
-    private final ZoneId attendanceZone;
+    private final BusinessClock businessClock;
+    private final AttendanceCalculationService calculationService;
+    private final AuthorizationPolicyService authorizationPolicy;
+    private final SecurityAuditService auditService;
+    private final long maxSessionMinutes;
 
     public AttendanceSessionService(
             AttendanceSessionRepository repository,
@@ -46,56 +51,72 @@ public class AttendanceSessionService {
             LeaveRequestRepository leaveRequestRepository,
             AppSettingsService settingsService,
             SecurityUtils securityUtils,
-            @Value("${app.attendance.zone-id:Asia/Kathmandu}") String attendanceZoneId
+            AuthorizationPolicyService authorizationPolicy,
+            SecurityAuditService auditService,
+            BusinessClock businessClock,
+            AttendanceCalculationService calculationService,
+            @Value("${app.policy.attendance.max-session-minutes:1440}") long maxSessionMinutes
     ) {
         this.repository = repository;
         this.userRepository = userRepository;
         this.leaveRequestRepository = leaveRequestRepository;
         this.settingsService = settingsService;
         this.securityUtils = securityUtils;
-        this.attendanceZone = ZoneId.of(attendanceZoneId);
+        this.authorizationPolicy = authorizationPolicy;
+        this.auditService = auditService;
+        this.businessClock = businessClock;
+        this.calculationService = calculationService;
+        this.maxSessionMinutes = maxSessionMinutes;
     }
 
     public AttendanceSessionResponse startSession() {
         User currentUser = getCurrentUser();
-        LocalDate today = LocalDate.now(attendanceZone);
+        LocalDate today = businessClock.today();
         if (isOnApprovedLeave(currentUser.getId(), today)) {
             throw new ResponseStatusException(BAD_REQUEST, "You are on approved leave today. Ask an admin to start attendance if work is required.");
         }
 
-        return startSessionForUser(currentUser);
+        AttendanceSessionResponse response = startSessionForUser(currentUser);
+        auditAttendanceEvent(currentUser, "ATTENDANCE_SESSION_STARTED", "SELF_SERVICE");
+        return response;
     }
 
-    public AttendanceSessionResponse startUserActiveSession(Long userId) {
+    public AttendanceSessionResponse startUserActiveSession(Long userId, String reason) {
         User currentUser = getCurrentUser();
-        if (currentUser.getRole() != Role.ADMIN && currentUser.getRole() != Role.MANAGER) {
-            throw new ResponseStatusException(FORBIDDEN, "Only admins and managers can start team sessions.");
-        }
         if (!settingsService.attendanceAdminOverrideEnabled()) {
             throw new ResponseStatusException(BAD_REQUEST, "Admin attendance overrides are disabled in settings.");
         }
         User targetUser = userRepository.findById(userId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
+        authorizationPolicy.requireManageAttendance(currentUser, targetUser);
         if (targetUser.getRole() == Role.ADMIN) {
             throw new ResponseStatusException(BAD_REQUEST, "Admin attendance sessions cannot be started from Team Attendance.");
         }
-        return startSessionForUser(targetUser);
+        if (Boolean.FALSE.equals(targetUser.getActive())) {
+            throw new ResponseStatusException(CONFLICT, "Attendance cannot be started for a deactivated user.");
+        }
+        AttendanceSessionResponse response = startSessionForUser(targetUser);
+        auditAttendanceOverride(currentUser, targetUser, "ATTENDANCE_SESSION_STARTED", reason);
+        return response;
     }
 
     public AttendanceSessionResponse endSession() {
         User currentUser = getCurrentUser();
 
-        List<AttendanceSession> activeSessions = repository.findByUserIdAndEndTimeIsNull(currentUser.getId());
-        if (activeSessions.isEmpty()) {
+        AttendanceSession activeSession = repository.findActiveByUserIdForUpdate(currentUser.getId())
+                .orElse(null);
+        if (activeSession == null) {
             throw new ResponseStatusException(BAD_REQUEST, "No active session found to end.");
         }
 
-        return closeSession(activeSessions.getFirst(), Instant.now());
+        AttendanceSessionResponse response = closeSession(activeSession, businessClock.now(), false);
+        auditAttendanceEvent(currentUser, "ATTENDANCE_SESSION_ENDED", "SELF_SERVICE");
+        return response;
     }
 
     public AttendanceSessionResponse heartbeat() {
         AttendanceSession session = getCurrentUserActiveSession();
-        session.setLastHeartbeatAt(Instant.now());
+        session.setLastHeartbeatAt(businessClock.now());
         return map(repository.save(session));
     }
 
@@ -104,10 +125,12 @@ public class AttendanceSessionService {
         if (session.getBreakStartedAt() != null) {
             throw new ResponseStatusException(BAD_REQUEST, "You are already on break.");
         }
-        Instant now = Instant.now();
+        Instant now = businessClock.now();
         session.setBreakStartedAt(now);
         session.setLastHeartbeatAt(now);
-        return map(repository.save(session));
+        AttendanceSessionResponse response = map(repository.save(session));
+        auditAttendanceEvent(session.getUser(), "ATTENDANCE_BREAK_STARTED", "SELF_SERVICE");
+        return response;
     }
 
     public AttendanceSessionResponse endBreak() {
@@ -115,34 +138,37 @@ public class AttendanceSessionService {
         if (session.getBreakStartedAt() == null) {
             throw new ResponseStatusException(BAD_REQUEST, "No active break found.");
         }
-        Instant now = Instant.now();
-        session.setBreakMinutes(Math.toIntExact(totalBreakMinutes(session, now)));
+        Instant now = businessClock.now();
+        session.setBreakMinutes(Math.toIntExact(calculationService.breakMinutes(session, now)));
         session.setBreakStartedAt(null);
         session.setLastHeartbeatAt(now);
-        return map(repository.save(session));
+        AttendanceSessionResponse response = map(repository.save(session));
+        auditAttendanceEvent(session.getUser(), "ATTENDANCE_BREAK_ENDED", "SELF_SERVICE");
+        return response;
     }
 
-    public AttendanceSessionResponse endUserActiveSession(Long userId) {
+    public AttendanceSessionResponse endUserActiveSession(Long userId, String reason) {
         User currentUser = getCurrentUser();
-        if (currentUser.getRole() != Role.ADMIN && currentUser.getRole() != Role.MANAGER) {
-            throw new ResponseStatusException(FORBIDDEN, "Only admins and managers can close team sessions.");
-        }
         if (!settingsService.attendanceAdminOverrideEnabled()) {
             throw new ResponseStatusException(BAD_REQUEST, "Admin attendance overrides are disabled in settings.");
         }
 
         User targetUser = userRepository.findById(userId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
+        authorizationPolicy.requireManageAttendance(currentUser, targetUser);
         if (targetUser.getRole() == Role.ADMIN) {
             throw new ResponseStatusException(BAD_REQUEST, "Admin attendance sessions cannot be closed from Team Attendance.");
         }
 
-        List<AttendanceSession> activeSessions = repository.findByUserIdAndEndTimeIsNull(targetUser.getId());
-        if (activeSessions.isEmpty()) {
+        AttendanceSession activeSession = repository.findActiveByUserIdForUpdate(targetUser.getId())
+                .orElse(null);
+        if (activeSession == null) {
             throw new ResponseStatusException(BAD_REQUEST, "No active session found for this team member.");
         }
 
-        return closeSession(activeSessions.getFirst(), Instant.now());
+        AttendanceSessionResponse response = closeSession(activeSession, businessClock.now(), true);
+        auditAttendanceOverride(currentUser, targetUser, "ATTENDANCE_SESSION_ENDED", reason);
+        return response;
     }
 
     public List<AttendanceSessionResponse> getMySessions() {
@@ -151,42 +177,61 @@ public class AttendanceSessionService {
     }
 
     public List<AttendanceSessionResponse> getAllSessions() {
-        return repository.findAllByOrderByStartTimeDesc().stream()
+        User currentUser = getCurrentUser();
+        List<AttendanceSession> sessions = switch (currentUser.getRole()) {
+            case ADMIN -> repository.findAllByOrderByStartTimeDesc();
+            case MANAGER -> repository.findVisibleToManager(currentUser.getId());
+            case EMPLOYEE -> repository.findByUserIdOrderByStartTimeDesc(currentUser.getId());
+        };
+        return sessions.stream()
                 .filter(session -> session.getUser().getRole() != Role.ADMIN)
                 .map(this::map)
                 .toList();
     }
 
     public List<AttendanceSessionResponse> getSessionsByUser(Long userId) {
+        User currentUser = getCurrentUser();
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
+        authorizationPolicy.requireViewAttendance(currentUser, target);
         return repository.findByUserIdOrderByStartTimeDesc(userId).stream().map(this::map).toList();
     }
 
     public AttendanceDaySummaryResponse getMyTodaySummary() {
         User currentUser = getCurrentUser();
-        LocalDate today = LocalDate.now(attendanceZone);
-        return buildSummary(currentUser, today, Instant.now(), isOnApprovedLeave(currentUser.getId(), today));
+        LocalDate today = businessClock.today();
+        return buildSummary(currentUser, today, businessClock.now(), isOnApprovedLeave(currentUser.getId(), today));
     }
 
     public List<AttendanceDaySummaryResponse> getTeamDailySummary(LocalDate date) {
-        LocalDate workDate = date != null ? date : LocalDate.now(attendanceZone);
-        Instant from = workDate.atStartOfDay(attendanceZone).toInstant();
-        Instant to = workDate.plusDays(1).atStartOfDay(attendanceZone).toInstant();
-        Instant now = Instant.now();
+        LocalDate workDate = date != null ? date : businessClock.today();
+        Instant from = businessClock.startOfDay(workDate);
+        Instant to = businessClock.startOfDay(workDate.plusDays(1));
+        Instant now = businessClock.now();
 
-        Map<Long, List<AttendanceSession>> sessionsByUser = repository
-                .findSessionsOverlappingDay(from, to)
-                .stream()
-                .collect(Collectors.groupingBy(session -> session.getUser().getId()));
-        Set<Long> usersOnLeave = leaveRequestRepository
-                .findByStatusAndStartDateLessThanEqualAndEndDateGreaterThanEqual(LeaveStatus.APPROVED, workDate, workDate)
-                .stream()
-                .map(leave -> leave.getUser().getId())
-                .collect(Collectors.toSet());
+        User currentUser = getCurrentUser();
+        List<User> visibleUsers = switch (currentUser.getRole()) {
+            case ADMIN -> userRepository.findAllActiveNonAdmin();
+            case MANAGER -> userRepository.findActiveManagedEmployees(currentUser.getId());
+            case EMPLOYEE -> List.of(currentUser);
+        };
+        List<Long> visibleUserIds = visibleUsers.stream().map(User::getId).toList();
+        Map<Long, List<AttendanceSession>> sessionsByUser = visibleUserIds.isEmpty()
+                ? Map.of()
+                : repository.findSessionsOverlappingDayForUsers(visibleUserIds, from, to)
+                        .stream()
+                        .collect(Collectors.groupingBy(session -> session.getUser().getId()));
+        Set<Long> usersOnLeave = visibleUserIds.isEmpty()
+                ? Set.of()
+                : leaveRequestRepository
+                        .findOverlappingForUsers(
+                                LeaveStatus.APPROVED, workDate, workDate, visibleUserIds
+                        )
+                        .stream()
+                        .map(leave -> leave.getUser().getId())
+                        .collect(Collectors.toSet());
 
-        return userRepository.findAll().stream()
-                .filter(user -> Boolean.TRUE.equals(user.getActive()))
-                .filter(user -> user.getRole() != Role.ADMIN)
-                .sorted(Comparator.comparing(User::getFullName, String.CASE_INSENSITIVE_ORDER))
+        return visibleUsers.stream()
                 .map(user -> buildSummary(
                         user,
                         workDate,
@@ -207,16 +252,12 @@ public class AttendanceSessionService {
     }
 
     public List<AttendanceSessionResponse> getSessionsForExport() {
-        User currentUser = getCurrentUser();
-        if (currentUser.getRole() == Role.ADMIN || currentUser.getRole() == Role.MANAGER) {
-            return getAllSessions();
-        }
-        return getMySessions();
+        return getAllSessions();
     }
 
     private AttendanceDaySummaryResponse buildSummary(User user, LocalDate workDate, Instant now, boolean onLeave) {
-        Instant from = workDate.atStartOfDay(attendanceZone).toInstant();
-        Instant to = workDate.plusDays(1).atStartOfDay(attendanceZone).toInstant();
+        Instant from = businessClock.startOfDay(workDate);
+        Instant to = businessClock.startOfDay(workDate.plusDays(1));
         List<AttendanceSession> sessions = repository
                 .findUserSessionsOverlappingDay(user.getId(), from, to);
         return buildSummary(user, workDate, sessions, now, onLeave);
@@ -229,8 +270,8 @@ public class AttendanceSessionService {
             Instant now,
             boolean onLeave
     ) {
-        Instant from = workDate.atStartOfDay(attendanceZone).toInstant();
-        Instant to = workDate.plusDays(1).atStartOfDay(attendanceZone).toInstant();
+        Instant from = businessClock.startOfDay(workDate);
+        Instant to = businessClock.startOfDay(workDate.plusDays(1));
         Instant firstStart = sessions.stream()
                 .map(AttendanceSession::getStartTime)
                 .map(start -> start.isBefore(from) ? from : start)
@@ -256,7 +297,7 @@ public class AttendanceSessionService {
         Instant activeLastHeartbeat = activeSession != null ? activeSession.getLastHeartbeatAt() : null;
 
         long totalMinutes = sessions.stream()
-                .mapToLong(session -> sessionMinutes(session, from, to, now))
+                .mapToLong(session -> calculationService.netMinutes(session, from, to, now))
                 .sum();
         long requiredMinutes = settingsService.attendanceRequiredMinutes();
         long graceMinutes = settingsService.attendanceGraceMinutes();
@@ -273,20 +314,10 @@ public class AttendanceSessionService {
                 requiredMinutes,
                 graceMinutes,
                 remainingMinutes,
+                Math.max(totalMinutes - requiredMinutes, 0),
+                Math.max(requiredMinutes - totalMinutes, 0),
                 resolveStatus(workDate, totalMinutes, activeStart, activeBreakStart, activeLastHeartbeat, sessions.isEmpty(), onLeave, now)
         );
-    }
-
-    private long sessionMinutes(AttendanceSession session, Instant from, Instant to, Instant now) {
-        Instant start = session.getStartTime().isBefore(from) ? from : session.getStartTime();
-        Instant rawEnd = session.getEndTime() != null ? session.getEndTime() : now;
-        Instant end = rawEnd.isAfter(to) ? to : rawEnd;
-        if (end.isBefore(start)) {
-            return 0;
-        }
-        long elapsedMinutes = Duration.between(start, end).toMinutes();
-        long breakMinutes = totalBreakMinutes(session, end);
-        return Math.max(elapsedMinutes - breakMinutes, 0);
     }
 
     private AttendanceDayStatus resolveStatus(
@@ -308,6 +339,9 @@ public class AttendanceSessionService {
         if (activeStart != null && isStaleSession(workDate, activeStart, now)) {
             return AttendanceDayStatus.MISSING_CHECKOUT;
         }
+        if (onLeave && !noSessions) {
+            return AttendanceDayStatus.WORKED_ON_LEAVE;
+        }
         if (activeBreakStart != null) {
             return AttendanceDayStatus.ON_BREAK;
         }
@@ -318,7 +352,9 @@ public class AttendanceSessionService {
             return AttendanceDayStatus.NO_ACTIVITY;
         }
         if (totalMinutes >= settingsService.attendanceRequiredMinutes()) {
-            return AttendanceDayStatus.COMPLETED;
+            return totalMinutes > settingsService.attendanceRequiredMinutes()
+                    ? AttendanceDayStatus.OVERTIME
+                    : AttendanceDayStatus.COMPLETED;
         }
         if (totalMinutes >= settingsService.attendanceGraceMinutes()) {
             return AttendanceDayStatus.COMPLETED_WITH_GRACE;
@@ -327,7 +363,7 @@ public class AttendanceSessionService {
     }
 
     private boolean isStaleSession(LocalDate workDate, Instant activeStart, Instant now) {
-        LocalDate today = LocalDate.now(attendanceZone);
+        LocalDate today = businessClock.today();
         return workDate.isBefore(today) || Duration.between(activeStart, now).toMinutes() >= settingsService.attendanceMissingCheckoutMinutes();
     }
 
@@ -337,62 +373,86 @@ public class AttendanceSessionService {
 
     private boolean isOnApprovedLeave(Long userId, LocalDate date) {
         return leaveRequestRepository
-                .findByStatusAndStartDateLessThanEqualAndEndDateGreaterThanEqual(LeaveStatus.APPROVED, date, date)
-                .stream()
-                .anyMatch(leave -> leave.getUser().getId().equals(userId));
+                .existsByUserIdAndStatusAndStartDateLessThanEqualAndEndDateGreaterThanEqual(
+                        userId,
+                        LeaveStatus.APPROVED,
+                        date,
+                        date
+                );
     }
 
     private AttendanceSessionResponse startSessionForUser(User user) {
+        User lockedUser = userRepository.findByIdForUpdate(user.getId())
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "User not found"));
         List<AttendanceSession> activeSessions = repository.findByUserIdAndEndTimeIsNull(user.getId());
         if (!activeSessions.isEmpty()) {
-            throw new ResponseStatusException(BAD_REQUEST, "This user already has an active session.");
+            throw new ResponseStatusException(CONFLICT, "This user already has an active session.");
         }
 
         AttendanceSession session = new AttendanceSession();
-        session.setUser(user);
-        Instant now = Instant.now();
+        session.setUser(lockedUser);
+        Instant now = businessClock.now();
         session.setStartTime(now);
         session.setLastHeartbeatAt(now);
 
-        return map(repository.save(session));
+        return map(repository.saveAndFlush(session));
     }
 
-    private AttendanceSessionResponse closeSession(AttendanceSession session, Instant endTime) {
+    private AttendanceSessionResponse closeSession(AttendanceSession session, Instant endTime, boolean override) {
+        long elapsed = Duration.between(session.getStartTime(), endTime).toMinutes();
+        if (!override && elapsed > maxSessionMinutes) {
+            throw new ResponseStatusException(
+                    CONFLICT,
+                    "Session exceeds the maximum duration and requires an authorized override"
+            );
+        }
         session.setEndTime(endTime);
         if (session.getBreakStartedAt() != null) {
-            session.setBreakMinutes(Math.toIntExact(totalBreakMinutes(session, endTime)));
+            session.setBreakMinutes(Math.toIntExact(calculationService.breakMinutes(session, endTime)));
             session.setBreakStartedAt(null);
         }
-        long workedMinutes = sessionMinutes(session, session.getStartTime(), endTime, endTime);
-        double hours = workedMinutes / 60.0;
-        session.setTotalHours(BigDecimal.valueOf(hours).setScale(2, RoundingMode.HALF_UP));
+        long workedMinutes = calculationService.netMinutes(session, session.getStartTime(), endTime, endTime);
+        session.setTotalHours(calculationService.hours(workedMinutes));
         return map(repository.save(session));
     }
 
     private AttendanceSession getCurrentUserActiveSession() {
         User currentUser = getCurrentUser();
-        List<AttendanceSession> activeSessions = repository.findByUserIdAndEndTimeIsNull(currentUser.getId());
-        if (activeSessions.isEmpty()) {
-            throw new ResponseStatusException(BAD_REQUEST, "No active session found.");
-        }
-        return activeSessions.getFirst();
-    }
-
-    private long totalBreakMinutes(AttendanceSession session, Instant until) {
-        long savedBreakMinutes = session.getBreakMinutes() != null ? session.getBreakMinutes() : 0;
-        if (session.getBreakStartedAt() == null) {
-            return savedBreakMinutes;
-        }
-        if (until.isBefore(session.getBreakStartedAt())) {
-            return savedBreakMinutes;
-        }
-        return savedBreakMinutes + Duration.between(session.getBreakStartedAt(), until).toMinutes();
+        return repository.findActiveByUserIdForUpdate(currentUser.getId())
+                .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "No active session found."));
     }
 
     private User getCurrentUser() {
         String email = securityUtils.getCurrentUserEmail();
         return userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Current user not found"));
+    }
+
+    private void auditAttendanceOverride(User actor, User target, String eventType, String reason) {
+        auditService.recordWithDetails(
+                actor.getId(),
+                target.getId(),
+                eventType,
+                "SUCCESS",
+                actor.getRole() == Role.ADMIN
+                        ? "ADMIN_ORGANIZATION_OVERRIDE"
+                        : "SCOPED_MANAGER_OVERRIDE",
+                "reason=" + reason.trim(),
+                target.getEmail(),
+                RequestMetadata.current()
+        );
+    }
+
+    private void auditAttendanceEvent(User user, String eventType, String reason) {
+        auditService.record(
+                user.getId(),
+                user.getId(),
+                eventType,
+                "SUCCESS",
+                reason,
+                user.getEmail(),
+                RequestMetadata.current()
+        );
     }
 
     private AttendanceSessionResponse map(AttendanceSession session) {

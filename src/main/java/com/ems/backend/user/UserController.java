@@ -26,8 +26,13 @@ import com.ems.backend.user.dto.ProfileResponse;
 import com.ems.backend.user.dto.UpdateNotificationPreferencesRequest;
 import com.ems.backend.user.dto.UpdateProfileRequest;
 import com.ems.backend.user.dto.UpdateUserRequest;
+import com.ems.backend.user.dto.RevokeSessionsRequest;
+import com.ems.backend.security.RequestMetadata;
+import com.ems.backend.security.SessionRevocationService;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/users")
@@ -36,15 +41,18 @@ public class UserController {
     private final UserService userService;
     private final UserProfileService userProfileService;
     private final StaffOverviewService staffOverviewService;
+    private final SessionRevocationService sessionRevocationService;
 
     public UserController(
             UserService userService,
             UserProfileService userProfileService,
-            StaffOverviewService staffOverviewService
+            StaffOverviewService staffOverviewService,
+            SessionRevocationService sessionRevocationService
     ) {
         this.userService = userService;
         this.userProfileService = userProfileService;
         this.staffOverviewService = staffOverviewService;
+        this.sessionRevocationService = sessionRevocationService;
     }
 
     @GetMapping("/me")
@@ -84,6 +92,26 @@ public class UserController {
         return userProfileService.updateNotificationPreferences(request);
     }
 
+    @PostMapping("/me/sessions/revoke-all")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "Revoke all my sessions", description = "Invalidates every access token issued for the authenticated account.")
+    public Map<String, String> revokeMySessions(HttpServletRequest request) {
+        sessionRevocationService.revokeOwnSessions(RequestMetadata.from(request));
+        return Map.of("message", "All sessions have been revoked.");
+    }
+
+    @PostMapping("/{id}/sessions/revoke-all")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Revoke a user's sessions", description = "Administrator-only invalidation of every access token issued for a selected user.")
+    public Map<String, String> revokeUserSessions(
+            @PathVariable Long id,
+            @Valid @RequestBody RevokeSessionsRequest body,
+            HttpServletRequest request
+    ) {
+        sessionRevocationService.revokeUserSessions(id, body.reason(), RequestMetadata.from(request));
+        return Map.of("message", "The user's sessions have been revoked.");
+    }
+
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "List users", description = "Admins and managers can list staff. Optional page, size, and search parameters return a filtered paged response.")
@@ -99,7 +127,7 @@ public class UserController {
             @RequestParam(defaultValue = "false") boolean incompleteOnly
     ) {
         if (page != null || size != null) {
-            return userService.getUsersPaged(
+            return userService.getVisibleUsersPaged(
                     page != null ? page : 0,
                     size != null ? size : 20,
                     search,
@@ -111,7 +139,7 @@ public class UserController {
                     incompleteOnly
             );
         }
-        return userService.getAllUsers();
+        return userService.getVisibleUsers();
     }
 
     @GetMapping("/summary")

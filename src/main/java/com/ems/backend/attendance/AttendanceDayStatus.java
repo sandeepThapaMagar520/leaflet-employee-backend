@@ -6,7 +6,9 @@ public enum AttendanceDayStatus {
     IN_PROGRESS,
     ON_BREAK,
     MISSING_CHECKOUT,
+    WORKED_ON_LEAVE,
     UNDER_HOURS,
     COMPLETED_WITH_GRACE,
-    COMPLETED
+    COMPLETED,
+    OVERTIME
 }

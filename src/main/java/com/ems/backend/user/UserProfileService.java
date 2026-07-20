@@ -2,6 +2,11 @@ package com.ems.backend.user;
 
 import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.mail.EmailService;
+import com.ems.backend.auth.EmailVerificationTokenService;
+import com.ems.backend.media.MediaAsset;
+import com.ems.backend.media.MediaAttachmentService;
+import com.ems.backend.media.UploadPurpose;
+import com.ems.backend.security.RequestMetadata;
 import com.ems.backend.user.dto.NotificationPreferencesResponse;
 import com.ems.backend.user.dto.ProfileResponse;
 import com.ems.backend.user.dto.UpdateNotificationPreferencesRequest;
@@ -10,31 +15,33 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.util.UUID;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
-@Transactional
 public class UserProfileService {
     private final UserRepository userRepository;
     private final UserNotificationSettingsRepository notificationSettingsRepository;
     private final SecurityUtils securityUtils;
     private final EmailService emailService;
+    private final EmailVerificationTokenService emailVerificationTokenService;
+    private final MediaAttachmentService mediaAttachmentService;
 
     public UserProfileService(
             UserRepository userRepository,
             UserNotificationSettingsRepository notificationSettingsRepository,
             SecurityUtils securityUtils,
-            EmailService emailService
+            EmailService emailService,
+            EmailVerificationTokenService emailVerificationTokenService,
+            MediaAttachmentService mediaAttachmentService
     ) {
         this.userRepository = userRepository;
         this.notificationSettingsRepository = notificationSettingsRepository;
         this.securityUtils = securityUtils;
         this.emailService = emailService;
+        this.emailVerificationTokenService = emailVerificationTokenService;
+        this.mediaAttachmentService = mediaAttachmentService;
     }
 
     @Transactional(readOnly = true)
@@ -42,6 +49,7 @@ public class UserProfileService {
         return mapProfile(securityUtils.getCurrentUser());
     }
 
+    @Transactional
     public ProfileResponse updateMyProfile(UpdateProfileRequest request) {
         User user = securityUtils.getCurrentUser();
 
@@ -60,8 +68,26 @@ public class UserProfileService {
         if (request.timezone() != null && !request.timezone().isBlank()) {
             user.setTimezone(request.timezone().trim());
         }
-        if (request.profilePhotoUrl() != null) {
-            user.setProfilePhotoUrl(request.profilePhotoUrl().isBlank() ? null : request.profilePhotoUrl().trim());
+        if (request.profileMediaAssetId() != null
+                && (user.getProfileMediaAsset() == null
+                || !request.profileMediaAssetId().equals(user.getProfileMediaAsset().getId()))) {
+            MediaAsset previous = user.getProfileMediaAsset();
+            MediaAsset profile = mediaAttachmentService.attach(
+                    request.profileMediaAssetId(),
+                    UploadPurpose.PROFILE_IMAGE,
+                    user,
+                    user,
+                    "USER_PROFILE",
+                    user.getId().toString()
+            );
+            user.setProfileMediaAsset(profile);
+            user.setProfilePhotoUrl(profile.getProviderSecureUrl());
+            user.setProfilePhotoLegacyStatus("NONE");
+            User saved = userRepository.saveAndFlush(user);
+            if (previous != null) {
+                mediaAttachmentService.deleteAttached(previous, user, "PROFILE_REPLACED");
+            }
+            return mapProfile(saved);
         }
 
         return mapProfile(userRepository.save(user));
@@ -87,12 +113,16 @@ public class UserProfileService {
     }
 
     public void issueVerificationEmail(User user) {
-        String token = UUID.randomUUID().toString();
-        user.setEmailVerificationToken(token);
-        user.setEmailVerificationExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
-        user.setEmailVerified(false);
-        userRepository.save(user);
-        emailService.sendVerificationEmail(user.getEmail(), user.getFullName(), token);
+        EmailVerificationTokenService.IssuedVerification issued =
+                emailVerificationTokenService.issue(user.getId());
+        if (issued == null || !emailService.sendVerificationEmail(
+                issued.email(), issued.fullName(), issued.rawToken()
+        )) {
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                    "Verification state was created, but the email could not be delivered."
+            );
+        }
     }
 
     public void resendVerificationEmail() {
@@ -103,19 +133,12 @@ public class UserProfileService {
         issueVerificationEmail(user);
     }
 
-    public void verifyEmail(String token) {
-        User user = userRepository.findByEmailVerificationToken(token)
-                .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "Invalid or expired verification link."));
-
-        if (user.getEmailVerificationExpiresAt() == null
-                || user.getEmailVerificationExpiresAt().isBefore(Instant.now())) {
-            throw new ResponseStatusException(BAD_REQUEST, "Verification link has expired. Please request a new one.");
+    public void verifyEmail(String token, RequestMetadata metadata) {
+        EmailVerificationTokenService.VerificationResult result =
+                emailVerificationTokenService.consume(token, metadata);
+        if (result != EmailVerificationTokenService.VerificationResult.SUCCESS) {
+            throw new ResponseStatusException(BAD_REQUEST, "Invalid or expired verification link.");
         }
-
-        user.setEmailVerified(true);
-        user.setEmailVerificationToken(null);
-        user.setEmailVerificationExpiresAt(null);
-        userRepository.save(user);
     }
 
     public UserNotificationSettings getOrCreateSettings(User user) {
@@ -150,7 +173,9 @@ public class UserProfileService {
                 user.getEmail(),
                 user.getRole(),
                 user.getActive(),
-                user.getProfilePhotoUrl(),
+                user.getProfileMediaAsset() == null ? null : user.getProfilePhotoUrl(),
+                user.getProfileMediaAsset() == null ? null : user.getProfileMediaAsset().getId(),
+                user.getProfilePhotoLegacyStatus(),
                 user.getEmployeeId(),
                 user.getJoiningDate(),
                 user.getEmploymentType(),

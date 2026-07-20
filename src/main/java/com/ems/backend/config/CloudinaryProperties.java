@@ -7,7 +7,8 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "app.cloudinary")
 public class CloudinaryProperties {
     private String cloudName = "";
-    private String uploadPreset = "";
+    private String apiKey = "";
+    private String apiSecret = "";
 
     public String getCloudName() {
         return cloudName;
@@ -17,16 +18,25 @@ public class CloudinaryProperties {
         this.cloudName = cloudName;
     }
 
-    public String getUploadPreset() {
-        return uploadPreset;
+    public String getApiKey() {
+        return apiKey;
     }
 
-    public void setUploadPreset(String uploadPreset) {
-        this.uploadPreset = uploadPreset;
+    public void setApiKey(String apiKey) {
+        this.apiKey = apiKey;
+    }
+
+    public String getApiSecret() {
+        return apiSecret;
+    }
+
+    public void setApiSecret(String apiSecret) {
+        this.apiSecret = apiSecret;
     }
 
     public boolean isConfigured() {
         return cloudName != null && !cloudName.isBlank()
-                && uploadPreset != null && !uploadPreset.isBlank();
+                && apiKey != null && !apiKey.isBlank()
+                && apiSecret != null && !apiSecret.isBlank();
     }
 }

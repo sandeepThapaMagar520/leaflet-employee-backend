@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 public record ProjectResponse(
         Long id,
@@ -20,12 +21,17 @@ public record ProjectResponse(
         List<ProjectEmployeeResponse> assignedEmployees,
         String clientNotes,
         String internalNotes,
-        String documentUrl,
+        UUID documentMediaAssetId,
+        String documentDownloadUrl,
+        String documentLegacyStatus,
         BigDecimal budgetAmount,
         BigDecimal totalPaid,
         BigDecimal lastPaymentAmount,
         Instant lastPaymentAt,
         String lastPaymentNote,
+        boolean canManageProject,
+        boolean canViewFinancials,
+        boolean canRecordPayment,
         Integer progressPercentage,
         Instant createdAt,
         Instant updatedAt

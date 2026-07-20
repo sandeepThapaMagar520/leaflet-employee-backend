@@ -1,5 +1,6 @@
 package com.ems.backend.project;
 
+import com.ems.backend.media.MediaAsset;
 import com.ems.backend.user.User;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -52,6 +53,13 @@ public class Project {
 
     private String documentUrl;
 
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "document_media_asset_id")
+    private MediaAsset documentMediaAsset;
+
+    @Column(name = "document_legacy_status", nullable = false)
+    private String documentLegacyStatus = "NONE";
+
     @ManyToMany
     @JoinTable(
         name = "project_assignments",
@@ -59,6 +67,10 @@ public class Project {
         inverseJoinColumns = @JoinColumn(name = "user_id")
     )
     private Set<User> assignedEmployees = new HashSet<>();
+
+    @Version
+    @Column(nullable = false)
+    private long version;
 
     @Column(nullable = false, updatable = false)
     private Instant createdAt;

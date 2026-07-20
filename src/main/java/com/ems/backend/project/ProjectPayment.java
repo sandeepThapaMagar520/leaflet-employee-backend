@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Getter
 @Setter
@@ -32,6 +33,9 @@ public class ProjectPayment {
     @Column(name = "reference_note", columnDefinition = "TEXT")
     private String referenceNote;
 
+    @Column(name = "idempotency_key")
+    private UUID idempotencyKey;
+
     @ManyToOne(optional = false, fetch = FetchType.LAZY)
     @JoinColumn(name = "created_by_id")
     private User createdBy;
@@ -39,6 +43,10 @@ public class ProjectPayment {
     @OneToMany(mappedBy = "payment", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("createdAt ASC")
     private List<ProjectPaymentAttachment> attachments = new ArrayList<>();
+
+    @Version
+    @Column(nullable = false)
+    private long version;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

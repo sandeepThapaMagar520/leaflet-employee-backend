@@ -25,11 +25,8 @@ public class ProjectAccessService {
         if (user.getRole() == Role.MANAGER && project.getManager().getId().equals(user.getId())) {
             return true;
         }
-        if (user.getRole() == Role.EMPLOYEE) {
-            return project.getAssignedEmployees().stream()
-                    .anyMatch(employee -> employee.getId().equals(user.getId()));
-        }
-        return false;
+        return project.getAssignedEmployees().stream()
+                .anyMatch(employee -> employee.getId().equals(user.getId()));
     }
 
     public Project requireAccessibleProject(Long projectId, User user) {
@@ -59,7 +56,7 @@ public class ProjectAccessService {
 
     public boolean canManageTasks(User user, Project project) {
         return canManageProject(user, project)
-                || user.getRole() == Role.EMPLOYEE
+                || user.getRole() != Role.ADMIN
                 && Boolean.TRUE.equals(projectRepository.canMemberManageTasks(project.getId(), user.getId()));
     }
 
@@ -73,7 +70,7 @@ public class ProjectAccessService {
 
     public boolean canAddNotes(User user, Project project) {
         return canManageProject(user, project)
-                || user.getRole() == Role.EMPLOYEE
+                || user.getRole() != Role.ADMIN
                 && Boolean.TRUE.equals(projectRepository.canMemberAddNotes(project.getId(), user.getId()));
     }
 
@@ -85,7 +82,33 @@ public class ProjectAccessService {
         return canManageProject(user, project);
     }
 
-    public boolean canViewFinancials(User user) {
-        return user.getRole() == Role.ADMIN || user.getRole() == Role.MANAGER;
+    public boolean canViewProjectFinancials(User user, Project project) {
+        return canManageProject(user, project);
+    }
+
+    public boolean canRecordProjectPayment(User user, Project project) {
+        return canManageProject(user, project);
+    }
+
+    public Project requireFinanciallyVisibleProject(Long projectId, User user) {
+        Project project = requireAccessibleProject(projectId, user);
+        if (!canViewProjectFinancials(user, project)) {
+            throw new ResponseStatusException(
+                    FORBIDDEN,
+                    "You do not have permission to view project finances"
+            );
+        }
+        return project;
+    }
+
+    public Project requirePaymentManageableProject(Long projectId, User user) {
+        Project project = requireAccessibleProject(projectId, user);
+        if (!canRecordProjectPayment(user, project)) {
+            throw new ResponseStatusException(
+                    FORBIDDEN,
+                    "You do not have permission to record or change project payments"
+            );
+        }
+        return project;
     }
 }

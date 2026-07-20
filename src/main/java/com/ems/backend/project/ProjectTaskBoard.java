@@ -12,8 +12,7 @@ import java.time.Instant;
 @Table(
         name = "project_task_boards",
         uniqueConstraints = {
-                @UniqueConstraint(name = "uk_project_task_boards_project_key", columnNames = {"project_id", "status_key"}),
-                @UniqueConstraint(name = "uk_project_task_boards_project_name", columnNames = {"project_id", "name"})
+                @UniqueConstraint(name = "uk_project_task_boards_project_key", columnNames = {"project_id", "status_key"})
         }
 )
 public class ProjectTaskBoard {
@@ -39,6 +38,10 @@ public class ProjectTaskBoard {
 
     @Column(nullable = false)
     private boolean terminal = false;
+
+    @Version
+    @Column(nullable = false)
+    private long version;
 
     @Column(nullable = false, updatable = false)
     private Instant createdAt;

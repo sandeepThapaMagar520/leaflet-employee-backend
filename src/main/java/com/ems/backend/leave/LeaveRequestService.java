@@ -1,12 +1,18 @@
 package com.ems.backend.leave;
 
 import com.ems.backend.common.SecurityUtils;
+import com.ems.backend.authorization.AuthorizationPolicyService;
+import com.ems.backend.security.RequestMetadata;
+import com.ems.backend.security.SecurityAuditService;
 import com.ems.backend.leave.dto.CreateLeaveRequest;
 import com.ems.backend.leave.dto.LeaveBalanceResponse;
 import com.ems.backend.leave.dto.LeaveRequestResponse;
 import com.ems.backend.leave.dto.UpdateLeaveBalanceRequest;
 import com.ems.backend.leave.dto.UpdateLeaveStatusRequest;
 import com.ems.backend.settings.AppSettingsService;
+import com.ems.backend.notification.NotificationService;
+import com.ems.backend.notification.NotificationType;
+import com.ems.backend.time.BusinessClock;
 import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
 import com.ems.backend.user.UserRepository;
@@ -17,7 +23,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Service
@@ -27,17 +32,38 @@ public class LeaveRequestService {
     private final UserRepository userRepository;
     private final AppSettingsService settingsService;
     private final SecurityUtils securityUtils;
+    private final AuthorizationPolicyService authorizationPolicy;
+    private final SecurityAuditService auditService;
+    private final LeaveDayCalculator dayCalculator;
+    private final LeaveBalanceService balanceService;
+    private final LeaveTransitionPolicy transitionPolicy;
+    private final NotificationService notificationService;
+    private final BusinessClock businessClock;
 
     public LeaveRequestService(
             LeaveRequestRepository repository,
             UserRepository userRepository,
             AppSettingsService settingsService,
-            SecurityUtils securityUtils
+            SecurityUtils securityUtils,
+            AuthorizationPolicyService authorizationPolicy,
+            SecurityAuditService auditService,
+            LeaveDayCalculator dayCalculator,
+            LeaveBalanceService balanceService,
+            LeaveTransitionPolicy transitionPolicy,
+            NotificationService notificationService,
+            BusinessClock businessClock
     ) {
         this.repository = repository;
         this.userRepository = userRepository;
         this.settingsService = settingsService;
         this.securityUtils = securityUtils;
+        this.authorizationPolicy = authorizationPolicy;
+        this.auditService = auditService;
+        this.dayCalculator = dayCalculator;
+        this.balanceService = balanceService;
+        this.transitionPolicy = transitionPolicy;
+        this.notificationService = notificationService;
+        this.businessClock = businessClock;
     }
 
     public LeaveRequestResponse createRequest(CreateLeaveRequest request) {
@@ -47,6 +73,14 @@ public class LeaveRequestService {
         if (currentUser.getRole() == Role.ADMIN) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Admins can review leave requests but cannot submit them.");
         }
+        if (request.startDate().isBefore(businessClock.today())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Leave cannot start in the past");
+        }
+        userRepository.findByIdForUpdate(currentUser.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Current user not found"));
+        if (repository.existsBlockingOverlap(currentUser.getId(), request.startDate(), request.endDate())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Leave request overlaps pending or approved leave");
+        }
 
         LeaveRequest leave = new LeaveRequest();
         leave.setUser(currentUser);
@@ -55,23 +89,31 @@ public class LeaveRequestService {
         leave.setEndDate(request.endDate());
         leave.setReason(request.reason());
         leave.setStatus(LeaveStatus.PENDING);
-        return map(repository.save(leave));
+        LeaveRequest saved = repository.saveAndFlush(leave);
+        recordEvent(currentUser, currentUser, "LEAVE_REQUESTED", "requestId=" + saved.getId());
+        return map(saved, currentUser);
     }
 
     public List<LeaveRequestResponse> listRequests() {
         User currentUser = getCurrentUser();
-        List<LeaveRequest> requests = canReview(currentUser)
-                ? repository.findAllByOrderByCreatedAtDesc()
-                : repository.findByUserEmailIgnoreCaseOrderByCreatedAtDesc(currentUser.getEmail());
-        return requests.stream().map(this::map).toList();
+        List<LeaveRequest> requests = switch (currentUser.getRole()) {
+            case ADMIN -> repository.findAllByOrderByCreatedAtDesc();
+            case MANAGER -> repository.findVisibleToManager(currentUser.getId());
+            case EMPLOYEE -> repository.findByUserEmailIgnoreCaseOrderByCreatedAtDesc(
+                    currentUser.getEmail()
+            );
+        };
+        return requests.stream().map(request -> map(request, currentUser)).toList();
     }
 
     public List<LeaveRequestResponse> getRequestsForUser(Long userId) {
         User currentUser = getCurrentUser();
-        if (!canReview(currentUser) && !currentUser.getId().equals(userId)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can view only your own leave requests");
-        }
-        return repository.findByUserIdOrderByCreatedAtDesc(userId).stream().map(this::map).toList();
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        authorizationPolicy.requireViewLeave(currentUser, target);
+        return repository.findByUserIdOrderByCreatedAtDesc(userId).stream()
+                .map(request -> map(request, currentUser))
+                .toList();
     }
 
     public LeaveBalanceResponse getMyBalance() {
@@ -81,11 +123,9 @@ public class LeaveRequestService {
 
     public LeaveBalanceResponse getBalanceForUser(Long userId) {
         User currentUser = getCurrentUser();
-        if (!canReview(currentUser)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only admins and managers can view staff leave balances");
-        }
-        User targetUser = userRepository.findById(userId)
+        User targetUser = userRepository.findByIdForUpdate(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        authorizationPolicy.requireViewLeave(currentUser, targetUser);
         return balanceFor(targetUser);
     }
 
@@ -102,11 +142,11 @@ public class LeaveRequestService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "At least one leave balance is required");
         }
         if (annualRemainingDays != null) {
-            int approvedDays = approvedAnnualDays(targetUser);
+            int approvedDays = balanceService.balance(targetUser, LeaveType.ANNUAL, businessClock.today()).used();
             targetUser.setLeaveBalanceAdjustmentDays(annualRemainingDays + approvedDays - settingsService.annualLeaveDays());
         }
         if (sickRemainingDays != null) {
-            int sickApprovedDays = approvedSickDays(targetUser);
+            int sickApprovedDays = balanceService.balance(targetUser, LeaveType.SICK, businessClock.today()).used();
             targetUser.setSickLeaveBalanceAdjustmentDays(sickRemainingDays + sickApprovedDays - settingsService.sickLeaveDays());
         }
         User saved = userRepository.save(targetUser);
@@ -114,44 +154,16 @@ public class LeaveRequestService {
     }
 
     private LeaveBalanceResponse balanceFor(User user) {
-        int approvedDays = approvedAnnualDays(user);
-        int sickApprovedDays = approvedSickDays(user);
-        int annualAllowance = annualAllowance(user);
-        int sickAllowance = sickAllowance(user);
+        LeaveBalanceService.PeriodBalance annual = balanceService.balance(user, LeaveType.ANNUAL, businessClock.today());
+        LeaveBalanceService.PeriodBalance sick = balanceService.balance(user, LeaveType.SICK, businessClock.today());
         return new LeaveBalanceResponse(
-                annualAllowance,
-                approvedDays,
-                Math.max(annualAllowance - approvedDays, 0),
-                sickAllowance,
-                sickApprovedDays,
-                Math.max(sickAllowance - sickApprovedDays, 0)
+                annual.entitlement(),
+                annual.used(),
+                annual.remaining(),
+                sick.entitlement(),
+                sick.used(),
+                sick.remaining()
         );
-    }
-
-    private int approvedAnnualDays(User user) {
-        int currentYear = LocalDate.now().getYear();
-        return repository.findByUserIdAndStatus(user.getId(), LeaveStatus.APPROVED).stream()
-                .filter(request -> request.getLeaveType() == LeaveType.ANNUAL)
-                .filter(request -> request.getStartDate().getYear() == currentYear || request.getEndDate().getYear() == currentYear)
-                .mapToInt(this::requestedDays)
-                .sum();
-    }
-
-    private int approvedSickDays(User user) {
-        int currentYear = LocalDate.now().getYear();
-        return repository.findByUserIdAndStatus(user.getId(), LeaveStatus.APPROVED).stream()
-                .filter(request -> request.getLeaveType() == LeaveType.SICK)
-                .filter(request -> request.getStartDate().getYear() == currentYear || request.getEndDate().getYear() == currentYear)
-                .mapToInt(this::requestedDays)
-                .sum();
-    }
-
-    private int annualAllowance(User user) {
-        return Math.max(settingsService.annualLeaveDays() + (user.getLeaveBalanceAdjustmentDays() != null ? user.getLeaveBalanceAdjustmentDays() : 0), 0);
-    }
-
-    private int sickAllowance(User user) {
-        return Math.max(settingsService.sickLeaveDays() + (user.getSickLeaveBalanceAdjustmentDays() != null ? user.getSickLeaveBalanceAdjustmentDays() : 0), 0);
     }
 
     public LeaveRequestResponse approve(Long requestId, UpdateLeaveStatusRequest request) {
@@ -164,31 +176,60 @@ public class LeaveRequestService {
 
     public LeaveRequestResponse cancel(Long requestId) {
         User currentUser = getCurrentUser();
-        LeaveRequest leave = getRequest(requestId);
+        LeaveRequest leave = repository.findByIdForUpdate(requestId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Leave request not found"));
         if (!leave.getUser().getId().equals(currentUser.getId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can cancel only your own leave requests");
         }
-        if (leave.getStatus() != LeaveStatus.PENDING) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only pending leave requests can be cancelled");
-        }
+        transitionPolicy.requireTransition(leave.getStatus(), LeaveStatus.CANCELLED);
         leave.setStatus(LeaveStatus.CANCELLED);
-        return map(repository.save(leave));
+        LeaveRequest saved = repository.saveAndFlush(leave);
+        recordEvent(currentUser, leave.getUser(), "LEAVE_CANCELLED", "requestId=" + leave.getId());
+        return map(saved, currentUser);
     }
 
     private LeaveRequestResponse review(Long requestId, String reviewerNote, LeaveStatus status) {
         User currentUser = getCurrentUser();
-        if (!canReview(currentUser)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only admins and managers can review leave requests");
+        LeaveRequest leave = repository.findByIdForUpdate(requestId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Leave request not found"));
+        authorizationPolicy.requireReviewLeave(currentUser, leave);
+        transitionPolicy.requireTransition(leave.getStatus(), status);
+        if (Boolean.FALSE.equals(leave.getUser().getActive())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Leave cannot be reviewed for a deactivated user");
         }
-        LeaveRequest leave = getRequest(requestId);
-        if (leave.getStatus() != LeaveStatus.PENDING) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only pending leave requests can be reviewed");
+        if (status == LeaveStatus.APPROVED) {
+            balanceService.requireAvailableForApproval(
+                    leave.getUser(),
+                    leave.getLeaveType(),
+                    leave.getStartDate(),
+                    leave.getEndDate()
+            );
         }
         leave.setStatus(status);
         leave.setReviewer(currentUser);
         leave.setReviewerNote(normalize(reviewerNote));
-        leave.setReviewedAt(Instant.now());
-        return map(repository.save(leave));
+        leave.setReviewedAt(businessClock.now());
+        LeaveRequest saved = repository.saveAndFlush(leave);
+        auditService.recordWithDetails(
+                currentUser.getId(),
+                leave.getUser().getId(),
+                "LEAVE_REVIEWED",
+                "SUCCESS",
+                (currentUser.getRole() == Role.ADMIN
+                        ? "ADMIN_ORGANIZATION_OVERRIDE_"
+                        : "SCOPED_MANAGER_REVIEW_") + status.name(),
+                "requestId=" + leave.getId(),
+                leave.getUser().getEmail(),
+                RequestMetadata.current()
+        );
+        notificationService.notifyUserDatabaseOnly(
+                leave.getUser(),
+                NotificationType.SYSTEM,
+                "Leave request " + status.name().toLowerCase(),
+                "Your leave request was " + status.name().toLowerCase() + ".",
+                "/leave?request=" + leave.getId()
+        );
+        return map(saved, currentUser);
     }
 
     private LeaveRequest getRequest(Long requestId) {
@@ -198,10 +239,6 @@ public class LeaveRequestService {
 
     private User getCurrentUser() {
         return securityUtils.getCurrentUser();
-    }
-
-    private boolean canReview(User user) {
-        return user.getRole() == Role.ADMIN || user.getRole() == Role.MANAGER;
     }
 
     private void validateDates(LocalDate startDate, LocalDate endDate) {
@@ -217,7 +254,20 @@ public class LeaveRequestService {
     }
 
     private int requestedDays(LeaveRequest request) {
-        return (int) ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) + 1;
+        return dayCalculator.count(request.getStartDate(), request.getEndDate());
+    }
+
+    private void recordEvent(User actor, User target, String eventType, String details) {
+        auditService.recordWithDetails(
+                actor.getId(),
+                target.getId(),
+                eventType,
+                "SUCCESS",
+                eventType,
+                details,
+                target.getEmail(),
+                RequestMetadata.current()
+        );
     }
 
     private String normalize(String value) {
@@ -227,7 +277,7 @@ public class LeaveRequestService {
         return value.trim();
     }
 
-    private LeaveRequestResponse map(LeaveRequest request) {
+    private LeaveRequestResponse map(LeaveRequest request, User viewer) {
         return new LeaveRequestResponse(
                 request.getId(),
                 request.getUser().getId(),
@@ -241,7 +291,9 @@ public class LeaveRequestService {
                 request.getReviewer() != null ? request.getReviewer().getFullName() : null,
                 request.getReviewerNote(),
                 request.getReviewedAt(),
-                request.getCreatedAt()
+                request.getCreatedAt(),
+                request.getStatus() == LeaveStatus.PENDING
+                        && authorizationPolicy.canReviewLeave(viewer, request)
         );
     }
 }

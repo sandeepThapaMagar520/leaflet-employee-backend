@@ -38,11 +38,41 @@ public class NotificationService {
     }
 
     public void notifyUser(User user, NotificationType type, String title, String message, String link) {
-        if (user == null || Boolean.FALSE.equals(user.getActive())) {
+        if (!persistNotification(user, type, title, message, link)) {
             return;
         }
+
+        if (userProfileService.shouldEmailForNotification(user, type)) {
+            emailService.sendNotificationEmail(user.getEmail(), type, title, message, link);
+        }
+    }
+
+    /**
+     * Persists a required in-app notification in the caller's transaction
+     * without performing external email I/O inside that transaction.
+     */
+    public void notifyUserDatabaseOnly(
+            User user,
+            NotificationType type,
+            String title,
+            String message,
+            String link
+    ) {
+        persistNotification(user, type, title, message, link);
+    }
+
+    private boolean persistNotification(
+            User user,
+            NotificationType type,
+            String title,
+            String message,
+            String link
+    ) {
+        if (user == null || Boolean.FALSE.equals(user.getActive())) {
+            return false;
+        }
         if (notificationRepository.existsByUser_IdAndTypeAndLinkAndTitle(user.getId(), type, link, title)) {
-            return;
+            return false;
         }
         Notification notification = new Notification();
         notification.setUser(user);
@@ -51,10 +81,7 @@ public class NotificationService {
         notification.setMessage(message);
         notification.setLink(link);
         notificationRepository.save(notification);
-
-        if (userProfileService.shouldEmailForNotification(user, type)) {
-            emailService.sendNotificationEmail(user.getEmail(), type, title, message, link);
-        }
+        return true;
     }
 
     public void notifyUserId(Long userId, NotificationType type, String title, String message, String link) {

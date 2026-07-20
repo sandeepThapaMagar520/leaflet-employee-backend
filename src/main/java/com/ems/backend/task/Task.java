@@ -45,6 +45,10 @@ public class Task {
     @JoinColumn(name = "created_by_id")
     private User createdBy;
 
+    @Version
+    @Column(nullable = false)
+    private long version;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
