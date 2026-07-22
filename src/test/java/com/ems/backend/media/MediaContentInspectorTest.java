@@ -19,6 +19,18 @@ class MediaContentInspectorTest {
     private final MediaContentInspector inspector = new MediaContentInspector();
 
     @Test
+    void acceptsStructurallyValidPdf() throws Exception {
+        Path pdf = write("valid.pdf", validPdf());
+
+        DetectedMedia detected = inspector.inspect(
+                pdf, UploadPurpose.HR_DOCUMENT, "application/pdf", "valid.pdf"
+        );
+
+        assertEquals("pdf", detected.format());
+        assertEquals("application/pdf", detected.mimeType());
+    }
+
+    @Test
     void acceptsFullyDecodedJpegAndPng() throws Exception {
         Path jpeg = image("valid.jpg", "jpg", 128, 128);
         Path png = image("valid.png", "png", 128, 128);
@@ -42,10 +54,12 @@ class MediaContentInspectorTest {
         Path html = write("attack.jpg", "<html><script>alert(1)</script></html>");
         Path svg = write("attack.png", "<svg><script>alert(1)</script></svg>");
         Path executable = write("attack.pdf", "MZ\u0090\u0000program");
+        Path htmlPdf = write("attack-html.pdf", "<html><script>alert(1)</script></html>");
 
         assertReason("UNRECOGNIZED_FILE_SIGNATURE", html, "image/jpeg", "attack.jpg");
         assertReason("UNRECOGNIZED_FILE_SIGNATURE", svg, "image/png", "attack.png");
         assertReason("UNRECOGNIZED_FILE_SIGNATURE", executable, "application/pdf", "attack.pdf");
+        assertReason("UNRECOGNIZED_FILE_SIGNATURE", htmlPdf, "application/pdf", "attack-html.pdf");
     }
 
     @Test
@@ -58,12 +72,19 @@ class MediaContentInspectorTest {
                 "active.pdf",
                 "%PDF-1.4\n1 0 obj\n<< /JavaScript (alert) >>\nendobj\nxref\n%%EOF"
         );
+        Path missingXref = write(
+                "missing-xref.pdf",
+                "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF"
+        );
+        Path trailingPdf = write("trailing.pdf", validPdf() + "MZ");
         Path jpeg = image("trailing.jpg", "jpg", 128, 128);
         Files.write(jpeg, "MZ".getBytes(StandardCharsets.US_ASCII),
                 java.nio.file.StandardOpenOption.APPEND);
 
         assertReason("PDF_TRAILING_OR_TRUNCATED", truncatedPdf, "application/pdf", "truncated.pdf");
         assertReason("PDF_ACTIVE_CONTENT", activePdf, "application/pdf", "active.pdf");
+        assertReason("PDF_STRUCTURE_INVALID", missingXref, "application/pdf", "missing-xref.pdf");
+        assertReason("PDF_TRAILING_OR_TRUNCATED", trailingPdf, "application/pdf", "trailing.pdf");
         assertReason("IMAGE_TRAILING_OR_TRUNCATED", jpeg, "image/jpeg", "trailing.jpg");
     }
 
@@ -72,6 +93,9 @@ class MediaContentInspectorTest {
         Path image = image("photo.jpg", "jpg", 128, 128);
         assertReason("MIME_MISMATCH", image, "image/png", "photo.jpg");
         assertReason("EXTENSION_MISMATCH", image, "image/jpeg", "photo.png");
+        Path pdf = write("hints.pdf", validPdf());
+        assertReason("MIME_MISMATCH", pdf, "image/png", "hints.pdf");
+        assertReason("EXTENSION_MISMATCH", pdf, "application/pdf", "hints.png");
 
         Path tooSmall = image("small.png", "png", 32, 32);
         assertReason("IMAGE_TOO_SMALL", tooSmall, "image/png", "small.png");
@@ -86,6 +110,10 @@ class MediaContentInspectorTest {
         Path oversized = temporaryDirectory.resolve("oversized.jpg");
         Files.write(oversized, new byte[(5 * 1024 * 1024) + 1]);
         assertReason("FILE_TOO_LARGE", oversized, "image/jpeg", "oversized.jpg");
+
+        Path oversizedPdf = temporaryDirectory.resolve("oversized.pdf");
+        Files.write(oversizedPdf, new byte[(10 * 1024 * 1024) + 1]);
+        assertReason("FILE_TOO_LARGE", oversizedPdf, "application/pdf", "oversized.pdf");
     }
 
     private Path image(String filename, String format, int width, int height) throws Exception {
@@ -101,6 +129,12 @@ class MediaContentInspectorTest {
         return path;
     }
 
+    private String validPdf() {
+        return "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"
+                + "xref\n0 2\n0000000000 65535 f\n0000000009 00000 n\n"
+                + "trailer\n<< /Size 2 /Root 1 0 R >>\nstartxref\n45\n%%EOF";
+    }
+
     private void assertReason(
             String expected,
             Path path,
@@ -111,7 +145,7 @@ class MediaContentInspectorTest {
                 MediaValidationException.class,
                 () -> inspector.inspect(
                         path,
-                        filename.endsWith(".pdf")
+                        path.getFileName().toString().endsWith(".pdf")
                                 ? UploadPurpose.HR_DOCUMENT
                                 : UploadPurpose.PROFILE_IMAGE,
                         contentType,

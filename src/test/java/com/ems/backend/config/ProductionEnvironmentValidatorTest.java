@@ -52,6 +52,24 @@ class ProductionEnvironmentValidatorTest {
     }
 
     @Test
+    void productionAcceptsDisabledScannerWithoutScannerEndpoint() {
+        MockEnvironment environment = validProductionEnvironment()
+                .withProperty("MEDIA_SCANNER_ENABLED", "false");
+        environment.getPropertySources().addFirst(
+                new org.springframework.core.env.MapPropertySource(
+                        "scanner-disabled",
+                        java.util.Map.of(
+                                "MEDIA_SCANNER_ENABLED", "false",
+                                "MEDIA_SCANNER_HOST", "",
+                                "MEDIA_SCANNER_PORT", ""
+                        )
+                )
+        );
+
+        assertDoesNotThrow(() -> validator.validate(environment));
+    }
+
+    @Test
     void productionRejectsWeakJwtAndInvalidTokenMetadata() {
         MockEnvironment environment = validProductionEnvironment()
                 .withProperty("JWT_SECRET", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

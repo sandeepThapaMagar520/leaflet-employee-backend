@@ -8,27 +8,27 @@ public enum UploadPurpose {
     PROFILE_IMAGE(
             Set.of("jpeg", "png"), 5 * 1024 * 1024L,
             128, 4096, 16_000_000L, false,
-            false, "image", "upload", "leaflet/profile", false, 10
+            false, "image", "upload", "leaflet/profile", 10
     ),
     PROJECT_ATTACHMENT(
             Set.of("jpeg", "png", "pdf"), 10 * 1024 * 1024L,
             1, 8192, 25_000_000L, false,
-            true, "auto", "authenticated", "leaflet/project", true, 20
+            true, "auto", "authenticated", "leaflet/project", 20
     ),
     TASK_ATTACHMENT(
             Set.of("jpeg", "png", "pdf"), 10 * 1024 * 1024L,
             1, 8192, 25_000_000L, false,
-            true, "auto", "authenticated", "leaflet/task", true, 20
+            true, "auto", "authenticated", "leaflet/task", 20
     ),
     PAYMENT_ATTACHMENT(
             Set.of("jpeg", "png", "pdf"), 10 * 1024 * 1024L,
             1, 8192, 25_000_000L, false,
-            true, "auto", "authenticated", "leaflet/payment", true, 20
+            true, "auto", "authenticated", "leaflet/payment", 20
     ),
     HR_DOCUMENT(
             Set.of("pdf"), 10 * 1024 * 1024L,
             0, 0, 0, false,
-            true, "raw", "authenticated", "leaflet/hr", true, 10
+            true, "raw", "authenticated", "leaflet/hr", 10
     );
 
     private final Set<String> formats;
@@ -41,7 +41,6 @@ public enum UploadPurpose {
     private final String configuredResourceType;
     private final String deliveryType;
     private final String folder;
-    private final boolean malwareScanRequired;
     private final int hourlyAttempts;
 
     UploadPurpose(
@@ -55,7 +54,6 @@ public enum UploadPurpose {
             String configuredResourceType,
             String deliveryType,
             String folder,
-            boolean malwareScanRequired,
             int hourlyAttempts
     ) {
         this.formats = formats;
@@ -68,7 +66,6 @@ public enum UploadPurpose {
         this.configuredResourceType = configuredResourceType;
         this.deliveryType = deliveryType;
         this.folder = folder;
-        this.malwareScanRequired = malwareScanRequired;
         this.hourlyAttempts = hourlyAttempts;
     }
 
@@ -81,8 +78,18 @@ public enum UploadPurpose {
     public boolean privateAsset() { return privateAsset; }
     public String deliveryType() { return deliveryType; }
     public String folder() { return folder; }
-    public boolean malwareScanRequired() { return malwareScanRequired; }
     public int hourlyAttempts() { return hourlyAttempts; }
+
+    public boolean acceptsAttachmentScanStatus(String detectedFormat, ScanningStatus status) {
+        if (!formats.contains(detectedFormat) || status == null) {
+            return false;
+        }
+        if ("pdf".equals(detectedFormat)) {
+            return status == ScanningStatus.STRUCTURE_VALIDATED
+                    || status == ScanningStatus.CLEAN;
+        }
+        return status == ScanningStatus.NOT_REQUIRED;
+    }
 
     public boolean canUpload(Role role) {
         return switch (this) {

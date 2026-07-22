@@ -55,6 +55,14 @@ public class MediaAttachmentService {
         if (asset.getPurpose() != purpose) {
             deny(actor, asset, "WRONG_PURPOSE");
         }
+        if (!purpose.acceptsAttachmentScanStatus(
+                asset.getDetectedFormat(), asset.getScanningStatus()
+        )) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "The media validation state does not permit attachment."
+            );
+        }
         if (!purpose.attachmentTargets().contains(resourceType)) {
             deny(actor, asset, "WRONG_ATTACHMENT_TARGET");
         }

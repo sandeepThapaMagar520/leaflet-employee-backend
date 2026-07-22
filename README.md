@@ -54,8 +54,7 @@ ALLOWED_ORIGIN_PATTERNS=https://<your-frontend-domain>
 CLOUDINARY_CLOUD_NAME=<your_cloud_name>
 CLOUDINARY_API_KEY=<your_cloudinary_api_key>
 CLOUDINARY_API_SECRET=<your_cloudinary_api_secret>
-MEDIA_SCANNER_ENABLED=true
-MEDIA_SCANNER_HOST=<private_clamav_host>
+MEDIA_SCANNER_ENABLED=false
 SHOW_SQL=false
 ```
 
@@ -89,6 +88,18 @@ Store the same secret in the Apps Script `WEBHOOK_SECRET` script property. The w
 script owner and allow access to anyone. OTP values are never written to application logs.
 
 Render provides the `PORT` environment variable automatically, so it does not need to be set manually.
+
+ClamAV is not required by the current production policy. JPEG and PNG files retain
+full decode and provider validation. PDFs retain signature, MIME/extension, EOF,
+structure, active-content, trailing-data, checksum, authorization, ownership,
+quota, provider-response, private-delivery, audit, and cleanup controls, but are
+not malware-scanned. Accepted PDFs report `STRUCTURE_VALIDATED`; the application
+does not claim they are malware-free. Upload PDFs only from trusted sources.
+
+`MEDIA_SCANNER_HOST`, `MEDIA_SCANNER_PORT`,
+`MEDIA_SCANNER_CONNECT_TIMEOUT_MS`, and `MEDIA_SCANNER_READ_TIMEOUT_MS` are
+optional and inactive while `MEDIA_SCANNER_ENABLED=false`. A future deployment
+may set the flag to `true` and provide a reachable scanner endpoint.
 
 ## Environment
 

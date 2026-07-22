@@ -44,6 +44,62 @@ class MediaAttachmentServiceTest {
     }
 
     @Test
+    void purposeAwareValidationStatesControlAttachment() {
+        User owner = user(1L, Role.EMPLOYEE);
+        for (ScanningStatus allowed : new ScanningStatus[]{
+                ScanningStatus.STRUCTURE_VALIDATED, ScanningStatus.CLEAN
+        }) {
+            MediaAsset pdf = asset(owner, UploadPurpose.TASK_ATTACHMENT, MediaStatus.VERIFIED);
+            pdf.setDetectedFormat("pdf");
+            pdf.setScanningStatus(allowed);
+            when(repository.findByIdForUpdate(pdf.getId())).thenReturn(Optional.of(pdf));
+
+            assertEquals(MediaStatus.ATTACHED, service.attach(
+                    pdf.getId(), UploadPurpose.TASK_ATTACHMENT, owner, owner,
+                    "TASK_COMMENT", "12"
+            ).getStatus());
+        }
+
+        for (ScanningStatus denied : new ScanningStatus[]{
+                ScanningStatus.PENDING, ScanningStatus.MALWARE_DETECTED,
+                ScanningStatus.FAILED, ScanningStatus.UNAVAILABLE,
+                ScanningStatus.NOT_REQUIRED
+        }) {
+            MediaAsset pdf = asset(owner, UploadPurpose.TASK_ATTACHMENT, MediaStatus.VERIFIED);
+            pdf.setDetectedFormat("pdf");
+            pdf.setScanningStatus(denied);
+            when(repository.findByIdForUpdate(pdf.getId())).thenReturn(Optional.of(pdf));
+
+            assertStatus(409, () -> service.attach(
+                    pdf.getId(), UploadPurpose.TASK_ATTACHMENT, owner, owner,
+                    "TASK_COMMENT", "12"
+            ));
+        }
+    }
+
+    @Test
+    void structurallyValidatedPdfCanAttachToEveryDocumentPurpose() {
+        User employee = user(1L, Role.EMPLOYEE);
+        User manager = user(2L, Role.MANAGER);
+        User administrator = user(3L, Role.ADMIN);
+
+        assertPdfAttachable(
+                UploadPurpose.PROJECT_ATTACHMENT, employee, employee, "PROJECT", "10"
+        );
+        assertPdfAttachable(
+                UploadPurpose.TASK_ATTACHMENT, employee, employee, "TASK_COMMENT", "11"
+        );
+        assertPdfAttachable(
+                UploadPurpose.PAYMENT_ATTACHMENT, manager, manager,
+                "PROJECT_PAYMENT", "12"
+        );
+        assertPdfAttachable(
+                UploadPurpose.HR_DOCUMENT, administrator, employee,
+                "STAFF_DOCUMENT", "13"
+        );
+    }
+
+    @Test
     void rejectsCrossUserWrongPurposeAndNonVerifiedAssets() {
         User owner = user(1L, Role.EMPLOYEE);
         User attacker = user(2L, Role.EMPLOYEE);
@@ -103,7 +159,33 @@ class MediaAttachmentServiceTest {
         asset.setOwner(owner);
         asset.setPurpose(purpose);
         asset.setStatus(status);
+        asset.setDetectedFormat(purpose == UploadPurpose.HR_DOCUMENT ? "pdf" : "png");
+        asset.setScanningStatus(
+                purpose == UploadPurpose.HR_DOCUMENT
+                        ? ScanningStatus.STRUCTURE_VALIDATED
+                        : ScanningStatus.NOT_REQUIRED
+        );
         return asset;
+    }
+
+    private void assertPdfAttachable(
+            UploadPurpose purpose,
+            User actor,
+            User targetOwner,
+            String resourceType,
+            String resourceId
+    ) {
+        MediaAsset pdf = asset(actor, purpose, MediaStatus.VERIFIED);
+        pdf.setDetectedFormat("pdf");
+        pdf.setScanningStatus(ScanningStatus.STRUCTURE_VALIDATED);
+        when(repository.findByIdForUpdate(pdf.getId())).thenReturn(Optional.of(pdf));
+
+        MediaAsset attached = service.attach(
+                pdf.getId(), purpose, actor, targetOwner, resourceType, resourceId
+        );
+
+        assertEquals(MediaStatus.ATTACHED, attached.getStatus());
+        assertEquals(targetOwner.getId(), attached.getOwner().getId());
     }
 
     private void assertStatus(int expected, Runnable operation) {

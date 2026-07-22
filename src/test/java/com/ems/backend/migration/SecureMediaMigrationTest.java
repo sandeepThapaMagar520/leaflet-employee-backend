@@ -72,7 +72,7 @@ class SecureMediaMigrationTest {
                 .load();
         latest.migrate();
 
-        assertEquals("40", latest.info().current().getVersion().getVersion());
+        assertEquals("41", latest.info().current().getVersion().getVersion());
         assertTrue(latest.validateWithResult().validationSuccessful);
         assertEquals(0, scalar("""
                 SELECT COUNT(*) FROM media_assets WHERE status IN ('VERIFIED', 'ATTACHED')
@@ -97,6 +97,71 @@ class SecureMediaMigrationTest {
                     'idx_media_unattached_cleanup'
                 )
                 """) >= 3);
+    }
+
+    @Test
+    void v41AddsStructuralStatusWithoutReleasingQuarantinedAssets() throws Exception {
+        Flyway throughV40 = Flyway.configure()
+                .dataSource(jdbcUrl(), username(), password())
+                .locations("classpath:db/migration")
+                .target(MigrationVersion.fromVersion("40"))
+                .cleanDisabled(false)
+                .load();
+        throughV40.clean();
+        throughV40.migrate();
+
+        long userId;
+        try (Connection connection = connection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     INSERT INTO users (full_name, email, password, role, active)
+                     VALUES ('Media Owner', 'media-owner@example.test', '{disabled}',
+                         'EMPLOYEE', TRUE)
+                     RETURNING id
+                     """);
+             ResultSet result = statement.executeQuery()) {
+            assertTrue(result.next());
+            userId = result.getLong(1);
+        }
+        try (Connection connection = connection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     INSERT INTO media_assets (
+                         id, owner_user_id, created_by_user_id, purpose, status,
+                         provider, resource_type, delivery_type, detected_mime_type,
+                         detected_format, size_bytes, checksum_sha256, private_asset,
+                         scanning_status
+                     ) VALUES (
+                         '11111111-1111-1111-1111-111111111111', ?, ?,
+                         'TASK_ATTACHMENT', 'QUARANTINED', 'CLOUDINARY', 'raw',
+                         'authenticated', 'application/pdf', 'pdf', 10,
+                         repeat('a', 64), TRUE, 'UNAVAILABLE'
+                     )
+                     """)) {
+            statement.setLong(1, userId);
+            statement.setLong(2, userId);
+            statement.executeUpdate();
+        }
+
+        Flyway latest = Flyway.configure()
+                .dataSource(jdbcUrl(), username(), password())
+                .locations("classpath:db/migration")
+                .load();
+        latest.migrate();
+
+        assertEquals("41", latest.info().current().getVersion().getVersion());
+        assertEquals(1, scalar("""
+                SELECT COUNT(*) FROM media_assets
+                WHERE id = '11111111-1111-1111-1111-111111111111'
+                  AND status = 'QUARANTINED'
+                  AND scanning_status = 'UNAVAILABLE'
+                """));
+        try (Connection connection = connection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     UPDATE media_assets SET scanning_status = 'STRUCTURE_VALIDATED'
+                     WHERE id = '11111111-1111-1111-1111-111111111111'
+                     """)) {
+            assertEquals(1, statement.executeUpdate());
+        }
+        assertTrue(latest.validateWithResult().validationSuccessful);
     }
 
     private int scalar(String sql) throws Exception {

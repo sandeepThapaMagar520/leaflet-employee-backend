@@ -39,6 +39,7 @@ class MediaUploadServiceTest {
     private MediaUploadService service;
     private User employee;
     private DetectedMedia png;
+    private DetectedMedia pdf;
 
     @BeforeEach
     void setUp() {
@@ -51,6 +52,10 @@ class MediaUploadServiceTest {
         employee.setRole(Role.EMPLOYEE);
         png = new DetectedMedia(
                 "image/png", "png", 8, "checksum", 128, 128, 1, "photo.png"
+        );
+        pdf = new DetectedMedia(
+                "application/pdf", "pdf", 8, "pdf-checksum", null, null, null,
+                "document.pdf"
         );
         when(securityUtils.getCurrentUser()).thenReturn(employee);
         when(userRepository.findByIdForUpdate(employee.getId()))
@@ -75,20 +80,62 @@ class MediaUploadServiceTest {
 
         assertEquals(MediaStatus.VERIFIED, result.status());
         assertEquals(UploadPurpose.PROFILE_IMAGE, result.purpose());
+        assertEquals(ScanningStatus.NOT_REQUIRED, result.scanningStatus());
+        verify(scanner, never()).scan(any());
         verify(gateway).upload(any(), any(), any(), anyString());
     }
 
     @Test
-    void requiredScanFailureQuarantinesAndNeverUploadsToProvider() {
+    void scannerDisabledPdfIsStructurallyValidatedAndNeverCallsScanner() {
+        when(inspector.inspect(any(), any(), any(), any())).thenReturn(pdf);
+        when(gateway.upload(any(), any(), any(), anyString())).thenReturn(pdfProvider());
+
+        var result = service.upload(
+                UploadPurpose.TASK_ATTACHMENT,
+                new MockMultipartFile(
+                        "file", "document.pdf", "application/pdf", new byte[8]
+                )
+        );
+
+        assertEquals(MediaStatus.VERIFIED, result.status());
+        assertEquals(ScanningStatus.STRUCTURE_VALIDATED, result.scanningStatus());
+        verify(scanner, never()).scan(any());
+        verify(gateway).upload(any(), any(), any(), anyString());
+    }
+
+    @Test
+    void enabledScannerFailureQuarantinesPdfAndNeverUploadsToProvider() {
+        properties.getScanner().setEnabled(true);
+        when(inspector.inspect(any(), any(), any(), any())).thenReturn(pdf);
         when(scanner.scan(any())).thenReturn(MalwareScanner.ScanResult.UNAVAILABLE);
 
         var result = service.upload(
                 UploadPurpose.TASK_ATTACHMENT,
-                new MockMultipartFile("file", "photo.png", "image/png", new byte[8])
+                new MockMultipartFile(
+                        "file", "document.pdf", "application/pdf", new byte[8]
+                )
         );
 
         assertEquals(MediaStatus.QUARANTINED, result.status());
         verify(gateway, never()).upload(any(), any(), any(), anyString());
+    }
+
+    @Test
+    void enabledScannerCleanPdfIsAccuratelyMarkedClean() {
+        properties.getScanner().setEnabled(true);
+        when(inspector.inspect(any(), any(), any(), any())).thenReturn(pdf);
+        when(scanner.scan(any())).thenReturn(MalwareScanner.ScanResult.CLEAN);
+        when(gateway.upload(any(), any(), any(), anyString())).thenReturn(pdfProvider());
+
+        var result = service.upload(
+                UploadPurpose.TASK_ATTACHMENT,
+                new MockMultipartFile(
+                        "file", "document.pdf", "application/pdf", new byte[8]
+                )
+        );
+
+        assertEquals(ScanningStatus.CLEAN, result.scanningStatus());
+        verify(scanner).scan(any());
     }
 
     @Test
@@ -154,6 +201,21 @@ class MediaUploadServiceTest {
                 8,
                 128,
                 128,
+                Instant.now()
+        );
+    }
+
+    private CloudinaryGateway.ProviderAsset pdfProvider() {
+        return new CloudinaryGateway.ProviderAsset(
+                "asset-pdf-1",
+                "leaflet/task/id.pdf",
+                "raw",
+                "authenticated",
+                "https://res.cloudinary.com/cloud/raw/authenticated/id.pdf",
+                "pdf",
+                8,
+                null,
+                null,
                 Instant.now()
         );
     }

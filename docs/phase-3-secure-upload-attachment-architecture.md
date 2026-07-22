@@ -1,5 +1,26 @@
 # Phase 3 — Secure Upload and Attachment Architecture
 
+## Current PDF policy addendum (V41)
+
+The product decision after the original Phase 3 rollout is to run without a paid
+ClamAV service. The scanner abstraction and ClamAV client remain available for a
+future deployment, but `MEDIA_SCANNER_ENABLED=false` is safe in production and
+makes no scanner connection. A PDF that passes every existing content and
+provider validation is stored as `VERIFIED` with scanning status
+`STRUCTURE_VALIDATED`. It is never labeled `CLEAN` unless an enabled scanner
+actually reports a clean result.
+
+This policy preserves purpose authorization, ownership and parent binding,
+private authenticated delivery, rate limits, quotas, full provider-response
+validation, auditing, and cleanup. It also preserves PDF signature,
+MIME/extension, EOF, xref/structure, active-content, trailing-data, truncation,
+size, and checksum checks. These controls are structural validation only: malware
+scanning is not performed and malware-free handling is not claimed. Users must
+upload PDFs only from trusted sources.
+
+The original scanner/quarantine description below remains as historical Phase 3
+documentation and as the behavior used when optional scanning is enabled.
+
 ## Scope confirmation
 
 This phase changes only upload, attachment, media ownership, delivery, quota,

@@ -105,7 +105,9 @@ app:
     private-download-ttl-seconds: ${MEDIA_PRIVATE_DOWNLOAD_TTL_SECONDS:120}
     cleanup-cron: "${MEDIA_CLEANUP_CRON:0 17 * * * *}"
     scanner:
+      # When false, valid PDFs are marked STRUCTURE_VALIDATED, never CLEAN.
       enabled: ${MEDIA_SCANNER_ENABLED:false}
+      # Endpoint settings are used only when scanning is explicitly enabled.
       host: ${MEDIA_SCANNER_HOST:localhost}
       port: ${MEDIA_SCANNER_PORT:3310}
       connect-timeout-ms: ${MEDIA_SCANNER_CONNECT_TIMEOUT_MS:2000}

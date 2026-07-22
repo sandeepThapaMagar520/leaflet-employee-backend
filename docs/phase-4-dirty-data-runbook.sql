@@ -130,7 +130,8 @@ WHERE purpose NOT IN (
 ) OR status NOT IN (
     'PENDING', 'QUARANTINED', 'VERIFIED', 'REJECTED', 'ATTACHED', 'DELETED'
 ) OR scanning_status NOT IN (
-    'NOT_REQUIRED', 'PENDING', 'CLEAN', 'MALWARE_DETECTED', 'FAILED', 'UNAVAILABLE'
+    'NOT_REQUIRED', 'PENDING', 'CLEAN', 'STRUCTURE_VALIDATED',
+    'MALWARE_DETECTED', 'FAILED', 'UNAVAILABLE'
 );
 
 -- Existing FK constraints protect the principal relationships. This diagnostic

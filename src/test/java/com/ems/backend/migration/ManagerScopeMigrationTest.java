@@ -44,7 +44,7 @@ class ManagerScopeMigrationTest {
         flyway.clean();
         flyway.migrate();
 
-        assertEquals("40", flyway.info().current().getVersion().getVersion());
+        assertEquals("41", flyway.info().current().getVersion().getVersion());
         assertTrue(flyway.validateWithResult().validationSuccessful);
         assertEquals(0, scalarInt("SELECT COUNT(*) FROM manager_employee_scopes"));
 

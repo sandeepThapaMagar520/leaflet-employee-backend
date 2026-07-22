@@ -57,9 +57,11 @@ public class ProductionEnvironmentValidator implements EnvironmentPostProcessor 
         String cloudinaryApiSecret = requiredSecret(
                 environment, "CLOUDINARY_API_SECRET", 16, errors
         );
-        String mediaScannerEnabled = required(environment, "MEDIA_SCANNER_ENABLED", errors);
-        String mediaScannerHost = required(environment, "MEDIA_SCANNER_HOST", errors);
-        String mediaScannerPort = required(environment, "MEDIA_SCANNER_PORT", errors);
+        boolean mediaScannerEnabled = Boolean.parseBoolean(
+                environment.getProperty("MEDIA_SCANNER_ENABLED", "false")
+        );
+        String mediaScannerHost = environment.getProperty("MEDIA_SCANNER_HOST");
+        String mediaScannerPort = environment.getProperty("MEDIA_SCANNER_PORT");
         required(environment, "OUTBOX_WORKER_ENABLED", errors);
         String outboxEncryptionKey = requiredSecret(environment, "OUTBOX_ENCRYPTION_KEY", 32, errors);
 
@@ -120,17 +122,21 @@ public class ProductionEnvironmentValidator implements EnvironmentPostProcessor 
         if (cloudinaryApiSecret != null && isObviouslyUnsafe(cloudinaryApiSecret)) {
             errors.add("CLOUDINARY_API_SECRET contains a placeholder value");
         }
-        if (mediaScannerEnabled != null && !Boolean.parseBoolean(mediaScannerEnabled)) {
-            errors.add("MEDIA_SCANNER_ENABLED must be true in production");
+        if (mediaScannerEnabled && (mediaScannerHost == null
+                || mediaScannerHost.isBlank())) {
+            errors.add("MEDIA_SCANNER_HOST is required when MEDIA_SCANNER_ENABLED is true");
         }
-        if (mediaScannerHost != null
+        if (mediaScannerEnabled && mediaScannerHost != null
                 && (mediaScannerHost.isBlank()
                 || "localhost".equalsIgnoreCase(mediaScannerHost)
                 || "127.0.0.1".equals(mediaScannerHost)
                 || mediaScannerHost.contains("://"))) {
             errors.add("MEDIA_SCANNER_HOST must be an explicit reachable host name");
         }
-        if (mediaScannerPort != null) {
+        if (mediaScannerEnabled && (mediaScannerPort == null || mediaScannerPort.isBlank())) {
+            errors.add("MEDIA_SCANNER_PORT is required when MEDIA_SCANNER_ENABLED is true");
+        }
+        if (mediaScannerEnabled && mediaScannerPort != null && !mediaScannerPort.isBlank()) {
             try {
                 int port = Integer.parseInt(mediaScannerPort);
                 if (port < 1 || port > 65535) {

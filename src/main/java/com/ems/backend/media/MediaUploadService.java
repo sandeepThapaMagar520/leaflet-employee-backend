@@ -93,7 +93,9 @@ public class MediaUploadService {
                     file.getContentType(),
                     file.getOriginalFilename()
             );
-            if (purpose.malwareScanRequired()) {
+            boolean pdf = "pdf".equals(detected.format());
+            boolean scanPdf = pdf && properties.getScanner().isEnabled();
+            if (scanPdf) {
                 MalwareScanner.ScanResult scan = malwareScanner.scan(temporary);
                 if (scan != MalwareScanner.ScanResult.CLEAN) {
                     return quarantineOrReject(actor, purpose, detected, scan);
@@ -109,14 +111,15 @@ public class MediaUploadService {
             applyProvider(asset, uploaded);
             asset.setStatus(MediaStatus.VERIFIED);
             asset.setScanningStatus(
-                    purpose.malwareScanRequired()
-                            ? ScanningStatus.CLEAN
-                            : ScanningStatus.NOT_REQUIRED
+                    scanPdf ? ScanningStatus.CLEAN : initialScanningStatus(detected)
             );
             asset.setVerifiedAt(Instant.now());
             MediaAsset saved = repository.saveAndFlush(asset);
             audit(
-                    actor, saved, "UPLOAD_VERIFIED", "SUCCESS", "CONTENT_AND_PROVIDER_VERIFIED",
+                    actor, saved, "UPLOAD_VERIFIED", "SUCCESS",
+                    pdf && !scanPdf
+                            ? "PDF_STRUCTURE_VALIDATED_WITHOUT_MALWARE_SCAN"
+                            : "CONTENT_AND_PROVIDER_VERIFIED",
                     "format=%s,size=%d".formatted(detected.format(), detected.sizeBytes())
             );
             return map(saved);
@@ -247,10 +250,17 @@ public class MediaUploadService {
         asset.setHeight(detected.height());
         asset.setFrameCount(detected.frameCount());
         asset.setPrivateAsset(purpose.privateAsset());
-        asset.setScanningStatus(
-                purpose.malwareScanRequired() ? ScanningStatus.PENDING : ScanningStatus.NOT_REQUIRED
-        );
+        asset.setScanningStatus(initialScanningStatus(detected));
         return asset;
+    }
+
+    private ScanningStatus initialScanningStatus(DetectedMedia detected) {
+        if (!"pdf".equals(detected.format())) {
+            return ScanningStatus.NOT_REQUIRED;
+        }
+        return properties.getScanner().isEnabled()
+                ? ScanningStatus.PENDING
+                : ScanningStatus.STRUCTURE_VALIDATED;
     }
 
     private void applyProvider(MediaAsset asset, CloudinaryGateway.ProviderAsset provider) {
