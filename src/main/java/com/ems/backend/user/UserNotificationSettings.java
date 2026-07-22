@@ -43,4 +43,7 @@ public class UserNotificationSettings {
 
     @Column(name = "email_leave_updates", nullable = false)
     private Boolean emailLeaveUpdates = true;
+
+    @Column(name = "email_attendance_updates", nullable = false)
+    private Boolean emailAttendanceUpdates = true;
 }

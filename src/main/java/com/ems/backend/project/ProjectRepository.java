@@ -4,6 +4,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Optional;
@@ -64,4 +66,46 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
             order by p.createdAt desc
             """)
     List<Project> findAllForStaffMember(Long userId);
+
+    @Query(value = "select p.id from Project p", countQuery = "select count(p) from Project p")
+    Page<Long> findAllProjectIds(Pageable pageable);
+
+    @Query(value = """
+            select p.id from Project p
+            where p.manager.id = :userId or exists (
+                select assigned.id from Project assigned join assigned.assignedEmployees member
+                where assigned.id = p.id and member.id = :userId
+            )
+            """,
+            countQuery = """
+            select count(p) from Project p
+            where p.manager.id = :userId or exists (
+                select assigned.id from Project assigned join assigned.assignedEmployees member
+                where assigned.id = p.id and member.id = :userId
+            )
+            """)
+    Page<Long> findAccessibleProjectIds(@Param("userId") Long userId, Pageable pageable);
+
+    @Query("""
+            select distinct p from Project p
+            join fetch p.manager
+            join fetch p.createdBy
+            left join fetch p.assignedEmployees
+            where p.id in :ids
+            """)
+    List<Project> findAllWithDetailsByIdIn(@Param("ids") List<Long> ids);
+
+    @Query(value = """
+            select project_id as projectId, user_id as userId,
+                   can_manage_tasks as canManageTasks, can_add_notes as canAddNotes
+            from project_assignments where project_id in (:projectIds)
+            """, nativeQuery = true)
+    List<MemberPermissionRow> findMemberPermissions(@Param("projectIds") List<Long> projectIds);
+
+    interface MemberPermissionRow {
+        Long getProjectId();
+        Long getUserId();
+        Boolean getCanManageTasks();
+        Boolean getCanAddNotes();
+    }
 }

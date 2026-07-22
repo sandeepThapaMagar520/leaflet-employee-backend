@@ -1,5 +1,8 @@
 package com.ems.backend.attendance;
 
+import com.ems.backend.common.PageResponse;
+import com.ems.backend.common.Pagination;
+
 import com.ems.backend.attendance.dto.AttendanceDaySummaryResponse;
 import com.ems.backend.attendance.dto.AttendanceSessionResponse;
 import com.ems.backend.common.SecurityUtils;
@@ -171,22 +174,23 @@ public class AttendanceSessionService {
         return response;
     }
 
-    public List<AttendanceSessionResponse> getMySessions() {
-        String email = securityUtils.getCurrentUserEmail();
-        return repository.findByUserEmailIgnoreCaseOrderByStartTimeDesc(email).stream().map(this::map).toList();
+    @Transactional(readOnly = true)
+    public PageResponse<AttendanceSessionResponse> getMySessions(int page, int size) {
+        Long userId = getCurrentUser().getId();
+        var pageable = Pagination.page(page, size, "startTime", "desc", java.util.Set.of("startTime"));
+        return PageResponse.from(repository.findByUserId(userId, pageable), this::map);
     }
 
-    public List<AttendanceSessionResponse> getAllSessions() {
+    @Transactional(readOnly = true)
+    public PageResponse<AttendanceSessionResponse> getAllSessions(int page, int size) {
         User currentUser = getCurrentUser();
-        List<AttendanceSession> sessions = switch (currentUser.getRole()) {
-            case ADMIN -> repository.findAllByOrderByStartTimeDesc();
-            case MANAGER -> repository.findVisibleToManager(currentUser.getId());
-            case EMPLOYEE -> repository.findByUserIdOrderByStartTimeDesc(currentUser.getId());
+        var pageable = Pagination.page(page, size, "startTime", "desc", java.util.Set.of("startTime"));
+        var sessions = switch (currentUser.getRole()) {
+            case ADMIN -> repository.findAllNonAdmin(pageable);
+            case MANAGER -> repository.findVisibleToManager(currentUser.getId(), pageable);
+            case EMPLOYEE -> repository.findByUserId(currentUser.getId(), pageable);
         };
-        return sessions.stream()
-                .filter(session -> session.getUser().getRole() != Role.ADMIN)
-                .map(this::map)
-                .toList();
+        return PageResponse.from(sessions, this::map);
     }
 
     public List<AttendanceSessionResponse> getSessionsByUser(Long userId) {
@@ -203,18 +207,21 @@ public class AttendanceSessionService {
         return buildSummary(currentUser, today, businessClock.now(), isOnApprovedLeave(currentUser.getId(), today));
     }
 
-    public List<AttendanceDaySummaryResponse> getTeamDailySummary(LocalDate date) {
+    @Transactional(readOnly = true)
+    public PageResponse<AttendanceDaySummaryResponse> getTeamDailySummary(LocalDate date, int page, int size) {
         LocalDate workDate = date != null ? date : businessClock.today();
         Instant from = businessClock.startOfDay(workDate);
         Instant to = businessClock.startOfDay(workDate.plusDays(1));
         Instant now = businessClock.now();
 
         User currentUser = getCurrentUser();
-        List<User> visibleUsers = switch (currentUser.getRole()) {
-            case ADMIN -> userRepository.findAllActiveNonAdmin();
-            case MANAGER -> userRepository.findActiveManagedEmployees(currentUser.getId());
-            case EMPLOYEE -> List.of(currentUser);
+        var pageable = Pagination.page(page, size, "fullName", "asc", java.util.Set.of("fullName"));
+        var visiblePage = switch (currentUser.getRole()) {
+            case ADMIN -> userRepository.findAllActiveNonAdmin(pageable);
+            case MANAGER -> userRepository.findActiveManagedEmployees(currentUser.getId(), pageable);
+            case EMPLOYEE -> new org.springframework.data.domain.PageImpl<>(List.of(currentUser), pageable, 1);
         };
+        List<User> visibleUsers = visiblePage.getContent();
         List<Long> visibleUserIds = visibleUsers.stream().map(User::getId).toList();
         Map<Long, List<AttendanceSession>> sessionsByUser = visibleUserIds.isEmpty()
                 ? Map.of()
@@ -231,7 +238,7 @@ public class AttendanceSessionService {
                         .map(leave -> leave.getUser().getId())
                         .collect(Collectors.toSet());
 
-        return visibleUsers.stream()
+        List<AttendanceDaySummaryResponse> content = visibleUsers.stream()
                 .map(user -> buildSummary(
                         user,
                         workDate,
@@ -240,6 +247,8 @@ public class AttendanceSessionService {
                         usersOnLeave.contains(user.getId())
                 ))
                 .toList();
+        return PageResponse.from(new org.springframework.data.domain.PageImpl<>(
+                content, pageable, visiblePage.getTotalElements()));
     }
     
     public AttendanceSessionResponse getActiveSession() {
@@ -251,8 +260,20 @@ public class AttendanceSessionService {
         return map(activeSessions.getFirst());
     }
 
-    public List<AttendanceSessionResponse> getSessionsForExport() {
-        return getAllSessions();
+    @Transactional(readOnly = true)
+    public PageResponse<AttendanceSessionResponse> getSessionsForExport(
+            LocalDate fromDate, LocalDate toDate, int page, int size
+    ) {
+        User currentUser = getCurrentUser();
+        Instant from = businessClock.startOfDay(fromDate);
+        Instant to = businessClock.startOfDay(toDate.plusDays(1));
+        var pageable = Pagination.page(page, size, "startTime", "desc", java.util.Set.of("startTime"));
+        var sessions = switch (currentUser.getRole()) {
+            case ADMIN -> repository.findAllNonAdminBetween(from, to, pageable);
+            case MANAGER -> repository.findVisibleToManagerBetween(currentUser.getId(), from, to, pageable);
+            case EMPLOYEE -> repository.findByUserIdBetween(currentUser.getId(), from, to, pageable);
+        };
+        return PageResponse.from(sessions, this::map);
     }
 
     private AttendanceDaySummaryResponse buildSummary(User user, LocalDate workDate, Instant now, boolean onLeave) {

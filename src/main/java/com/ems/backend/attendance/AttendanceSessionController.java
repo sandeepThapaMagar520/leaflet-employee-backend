@@ -6,6 +6,7 @@ import com.ems.backend.attendance.dto.AttendanceCorrectionResponse;
 import com.ems.backend.attendance.dto.CreateAttendanceCorrectionRequest;
 import com.ems.backend.attendance.dto.ReviewAttendanceCorrectionRequest;
 import com.ems.backend.attendance.dto.AttendanceOverrideRequest;
+import com.ems.backend.common.PageResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -94,17 +95,22 @@ public class AttendanceSessionController {
     @GetMapping("/daily")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "Get team daily attendance summary", description = "Shows each active user's daily worked minutes and completion status for the selected date.")
-    public List<AttendanceDaySummaryResponse> getTeamDailySummary(
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+    public PageResponse<AttendanceDaySummaryResponse> getTeamDailySummary(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size
     ) {
-        return service.getTeamDailySummary(date);
+        return service.getTeamDailySummary(date, page, size);
     }
 
     @GetMapping("/me")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List my attendance sessions")
-    public List<AttendanceSessionResponse> getMySessions() {
-        return service.getMySessions();
+    public PageResponse<AttendanceSessionResponse> getMySessions(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return service.getMySessions(page, size);
     }
     
     @GetMapping("/active")
@@ -121,8 +127,11 @@ public class AttendanceSessionController {
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "Audit all attendance sessions")
-    public List<AttendanceSessionResponse> getAllSessions() {
-        return service.getAllSessions();
+    public PageResponse<AttendanceSessionResponse> getAllSessions(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return service.getAllSessions(page, size);
     }
 
     @PostMapping("/corrections")
@@ -135,8 +144,11 @@ public class AttendanceSessionController {
     @GetMapping("/corrections")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List attendance corrections", description = "Employees see their own requests; admins and managers see all requests.")
-    public List<AttendanceCorrectionResponse> listCorrections() {
-        return correctionService.list();
+    public PageResponse<AttendanceCorrectionResponse> listCorrections(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return correctionService.list(page, size);
     }
 
     @PatchMapping("/corrections/{correctionId}/approve")

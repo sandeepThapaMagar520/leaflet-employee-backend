@@ -1,5 +1,8 @@
 package com.ems.backend.attendance;
 
+import com.ems.backend.common.PageResponse;
+import com.ems.backend.common.Pagination;
+
 import com.ems.backend.attendance.dto.AttendanceCorrectionResponse;
 import com.ems.backend.attendance.dto.CreateAttendanceCorrectionRequest;
 import com.ems.backend.attendance.dto.ReviewAttendanceCorrectionRequest;
@@ -7,6 +10,7 @@ import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.authorization.AuthorizationPolicyService;
 import com.ems.backend.notification.NotificationService;
 import com.ems.backend.notification.NotificationType;
+import com.ems.backend.notification.EventIds;
 import com.ems.backend.security.RequestMetadata;
 import com.ems.backend.security.SecurityAuditService;
 import com.ems.backend.user.Role;
@@ -110,16 +114,15 @@ public class AttendanceCorrectionService {
     }
 
     @Transactional(readOnly = true)
-    public List<AttendanceCorrectionResponse> list() {
+    public PageResponse<AttendanceCorrectionResponse> list(int page, int size) {
         User currentUser = securityUtils.getCurrentUser();
-        List<AttendanceCorrectionRequest> requests = switch (currentUser.getRole()) {
-            case ADMIN -> correctionRepository.findAllByOrderByCreatedAtDesc();
-            case MANAGER -> correctionRepository.findVisibleToManager(currentUser.getId());
-            case EMPLOYEE -> correctionRepository.findByUserIdOrderByCreatedAtDesc(
-                    currentUser.getId()
-            );
+        var pageable = Pagination.page(page, size, "createdAt", "desc", java.util.Set.of("createdAt"));
+        var requests = switch (currentUser.getRole()) {
+            case ADMIN -> correctionRepository.findAllWithDetails(pageable);
+            case MANAGER -> correctionRepository.findVisibleToManager(currentUser.getId(), pageable);
+            case EMPLOYEE -> correctionRepository.findByUserId(currentUser.getId(), pageable);
         };
-        return requests.stream().map(request -> map(request, currentUser)).toList();
+        return PageResponse.from(requests, request -> map(request, currentUser));
     }
 
     public AttendanceCorrectionResponse approve(Long correctionId, ReviewAttendanceCorrectionRequest request) {
@@ -254,12 +257,15 @@ public class AttendanceCorrectionService {
     }
 
     private void notifyEmployee(AttendanceCorrectionRequest correction, String title, String message) {
-        notificationService.notifyUserDatabaseOnly(
+        notificationService.notifyUserEvent(
+                EventIds.stable("ATTENDANCE_CORRECTION_REVIEWED", correction.getId(), correction.getStatus(), correction.getVersion()),
+                "ATTENDANCE_CORRECTION_REVIEWED",
                 correction.getUser(),
                 NotificationType.SYSTEM,
                 title,
                 message,
-                "/attendance?correction=" + correction.getId()
+                "/attendance?correction=" + correction.getId(),
+                true
         );
     }
 
@@ -283,7 +289,8 @@ public class AttendanceCorrectionService {
                 correction.getReviewedAt(),
                 correction.getCreatedAt(),
                 correction.getStatus() == AttendanceCorrectionStatus.PENDING
-                        && authorizationPolicy.canReviewAttendanceCorrection(viewer, correction)
+                        && viewer.getRole() != Role.EMPLOYEE
+                        && !viewer.getId().equals(correction.getUser().getId())
         );
     }
 }

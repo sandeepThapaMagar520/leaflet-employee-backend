@@ -10,6 +10,8 @@ import java.util.UUID;
 public interface ProjectNoteMediaAttachmentRepository extends JpaRepository<ProjectNoteMediaAttachment, Long> {
     @EntityGraph(attributePaths = {"mediaAsset"})
     List<ProjectNoteMediaAttachment> findByNoteIdOrderByDisplayOrder(Long noteId);
+    @EntityGraph(attributePaths = {"note", "mediaAsset"})
+    List<ProjectNoteMediaAttachment> findByNoteIdInOrderByNoteIdAscDisplayOrderAsc(List<Long> noteIds);
     @EntityGraph(attributePaths = {"note", "note.project", "mediaAsset"})
     Optional<ProjectNoteMediaAttachment> findByMediaAssetId(UUID mediaAssetId);
 }

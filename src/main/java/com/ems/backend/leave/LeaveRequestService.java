@@ -1,5 +1,8 @@
 package com.ems.backend.leave;
 
+import com.ems.backend.common.PageResponse;
+import com.ems.backend.common.Pagination;
+
 import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.authorization.AuthorizationPolicyService;
 import com.ems.backend.security.RequestMetadata;
@@ -12,6 +15,7 @@ import com.ems.backend.leave.dto.UpdateLeaveStatusRequest;
 import com.ems.backend.settings.AppSettingsService;
 import com.ems.backend.notification.NotificationService;
 import com.ems.backend.notification.NotificationType;
+import com.ems.backend.notification.EventIds;
 import com.ems.backend.time.BusinessClock;
 import com.ems.backend.user.Role;
 import com.ems.backend.user.User;
@@ -94,16 +98,16 @@ public class LeaveRequestService {
         return map(saved, currentUser);
     }
 
-    public List<LeaveRequestResponse> listRequests() {
+    @Transactional(readOnly = true)
+    public PageResponse<LeaveRequestResponse> listRequests(int page, int size) {
         User currentUser = getCurrentUser();
-        List<LeaveRequest> requests = switch (currentUser.getRole()) {
-            case ADMIN -> repository.findAllByOrderByCreatedAtDesc();
-            case MANAGER -> repository.findVisibleToManager(currentUser.getId());
-            case EMPLOYEE -> repository.findByUserEmailIgnoreCaseOrderByCreatedAtDesc(
-                    currentUser.getEmail()
-            );
+        var pageable = Pagination.page(page, size, "createdAt", "desc", java.util.Set.of("createdAt"));
+        var requests = switch (currentUser.getRole()) {
+            case ADMIN -> repository.findAllWithDetails(pageable);
+            case MANAGER -> repository.findVisibleToManager(currentUser.getId(), pageable);
+            case EMPLOYEE -> repository.findByUserId(currentUser.getId(), pageable);
         };
-        return requests.stream().map(request -> map(request, currentUser)).toList();
+        return PageResponse.from(requests, request -> map(request, currentUser));
     }
 
     public List<LeaveRequestResponse> getRequestsForUser(Long userId) {
@@ -222,12 +226,16 @@ public class LeaveRequestService {
                 leave.getUser().getEmail(),
                 RequestMetadata.current()
         );
-        notificationService.notifyUserDatabaseOnly(
+        notificationService.notifyUserEvent(
+                EventIds.stable("LEAVE_REVIEWED", leave.getId(), status, leave.getVersion()),
+                "LEAVE_REVIEWED",
                 leave.getUser(),
                 NotificationType.SYSTEM,
                 "Leave request " + status.name().toLowerCase(),
                 "Your leave request was " + status.name().toLowerCase() + ".",
-                "/leave?request=" + leave.getId()
+                "/leave?request=" + leave.getId(),
+                true,
+                java.util.Map.of("resourceId", leave.getId(), "expectedStatus", status.name())
         );
         return map(saved, currentUser);
     }
@@ -293,7 +301,8 @@ public class LeaveRequestService {
                 request.getReviewedAt(),
                 request.getCreatedAt(),
                 request.getStatus() == LeaveStatus.PENDING
-                        && authorizationPolicy.canReviewLeave(viewer, request)
+                        && viewer.getRole() != Role.EMPLOYEE
+                        && !viewer.getId().equals(request.getUser().getId())
         );
     }
 }

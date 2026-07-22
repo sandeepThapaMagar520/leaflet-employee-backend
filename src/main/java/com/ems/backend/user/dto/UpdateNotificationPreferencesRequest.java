@@ -7,6 +7,7 @@ public record UpdateNotificationPreferencesRequest(
         Boolean emailTaskDueSoon,
         Boolean emailTaskOverdue,
         Boolean emailProjectAssigned,
-        Boolean emailLeaveUpdates
+        Boolean emailLeaveUpdates,
+        Boolean emailAttendanceUpdates
 ) {
 }

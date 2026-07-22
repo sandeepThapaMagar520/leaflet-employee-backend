@@ -66,7 +66,10 @@ public class ManagerScopeController {
 
     @GetMapping("/managers")
     @Operation(summary = "List active managers available for assignment")
-    public List<ManagerDirectoryResponse> listManagers() {
-        return service.listAvailableManagers();
+    public PageResponse<ManagerDirectoryResponse> listManagers(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return service.listAvailableManagers(page, size);
     }
 }

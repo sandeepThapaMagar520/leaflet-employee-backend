@@ -63,7 +63,10 @@ public class AuthController {
             HttpServletRequest servletRequest
     ) {
         authService.startAccountSetup(request, RequestMetadata.from(servletRequest));
-        return ResponseEntity.ok(Map.of("message", "Temporary password accepted. A six-digit OTP was sent to your email."));
+        return ResponseEntity.ok(Map.of(
+                "message", "Temporary password accepted. A six-digit OTP is queued for email delivery.",
+                "notificationDeliveryStatus", "QUEUED"
+        ));
     }
 
     @PostMapping("/change-password")
@@ -85,7 +88,10 @@ public class AuthController {
             HttpServletRequest servletRequest
     ) {
         authService.requestEmailChange(request, RequestMetadata.from(servletRequest));
-        return ResponseEntity.ok(Map.of("message", "A verification OTP was sent to the new email address."));
+        return ResponseEntity.ok(Map.of(
+                "message", "A verification OTP is queued for delivery to the new email address.",
+                "notificationDeliveryStatus", "QUEUED"
+        ));
     }
 
     @PostMapping("/change-email/verify")
@@ -151,6 +157,9 @@ public class AuthController {
     @Operation(summary = "Resend verification email", description = "Sends a new email verification link to the authenticated user.")
     public ResponseEntity<Map<String, String>> resendVerification() {
         userProfileService.resendVerificationEmail();
-        return ResponseEntity.ok(Map.of("message", "Verification email sent."));
+        return ResponseEntity.ok(Map.of(
+                "message", "Verification email queued.",
+                "notificationDeliveryStatus", "QUEUED"
+        ));
     }
 }

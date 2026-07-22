@@ -37,28 +37,38 @@ public class TaskController {
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "List managed tasks", description = "Admins see all tasks. Managers see tasks for their managed projects. Optional page and size parameters return a paged response.")
-    public Object getAllTasks(
-            @RequestParam(required = false) Integer page,
-            @RequestParam(required = false) Integer size
+    public PageResponse<TaskResponse> getAllTasks(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortDir
     ) {
-        if (page != null || size != null) {
-            return taskService.getAllTasksPaged(page != null ? page : 0, size != null ? size : 20);
-        }
-        return taskService.getAllTasks();
+        return taskService.getAllTasksPaged(page, size, sortBy, sortDir);
     }
 
     @GetMapping("/project/{projectId}")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List tasks by project")
-    public List<TaskResponse> getTasksByProject(@PathVariable Long projectId) {
-        return taskService.getTasksByProject(projectId);
+    public PageResponse<TaskResponse> getTasksByProject(
+            @PathVariable Long projectId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortDir
+    ) {
+        return taskService.getTasksByProject(projectId, page, size, sortBy, sortDir);
     }
 
     @GetMapping("/me")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List my tasks")
-    public List<TaskResponse> getMyTasks() {
-        return taskService.getMyTasks();
+    public PageResponse<TaskResponse> getMyTasks(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortDir
+    ) {
+        return taskService.getMyTasks(page, size, sortBy, sortDir);
     }
 
     @PutMapping("/{taskId}")
@@ -92,8 +102,12 @@ public class TaskController {
     @GetMapping("/{taskId}/comments")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List task comments")
-    public List<TaskCommentResponse> getTaskComments(@PathVariable Long taskId) {
-        return taskService.getTaskComments(taskId);
+    public PageResponse<TaskCommentResponse> getTaskComments(
+            @PathVariable Long taskId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size
+    ) {
+        return taskService.getTaskComments(taskId, page, size);
     }
 
     @PostMapping("/{taskId}/comments")

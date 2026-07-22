@@ -1,6 +1,7 @@
 package com.ems.backend.notification;
 
 import com.ems.backend.notification.dto.NotificationResponse;
+import com.ems.backend.common.PageResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,8 +23,11 @@ public class NotificationController {
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List my notifications")
-    public List<NotificationResponse> getMyNotifications() {
-        return notificationService.getMyNotifications();
+    public PageResponse<NotificationResponse> getMyNotifications(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return notificationService.getMyNotifications(page, size);
     }
 
     @GetMapping("/unread-count")

@@ -7,6 +7,7 @@ public record NotificationPreferencesResponse(
         boolean emailTaskDueSoon,
         boolean emailTaskOverdue,
         boolean emailProjectAssigned,
-        boolean emailLeaveUpdates
+        boolean emailLeaveUpdates,
+        boolean emailAttendanceUpdates
 ) {
 }

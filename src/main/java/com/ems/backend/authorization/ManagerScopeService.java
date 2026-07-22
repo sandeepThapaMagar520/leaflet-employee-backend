@@ -2,6 +2,7 @@ package com.ems.backend.authorization;
 
 import com.ems.backend.authorization.dto.ManagerScopeResponse;
 import com.ems.backend.common.PageResponse;
+import com.ems.backend.common.Pagination;
 import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.security.RequestMetadata;
 import com.ems.backend.security.SecurityAuditService;
@@ -137,11 +138,7 @@ public class ManagerScopeService {
         if (manager.getRole() != Role.MANAGER) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Selected user is not a manager.");
         }
-        var pageable = PageRequest.of(
-                Math.max(page, 0),
-                Math.max(1, Math.min(size, 100)),
-                Sort.by("employee.fullName").ascending()
-        );
+        var pageable = Pagination.page(page, size, "employee.fullName", "asc", java.util.Set.of("employee.fullName"));
         return PageResponse.from(
                 scopeRepository.findByManagerIdAndActiveTrue(managerId, pageable),
                 scope -> mapDirectory(scope.getEmployee())
@@ -149,11 +146,10 @@ public class ManagerScopeService {
     }
 
     @Transactional(readOnly = true)
-    public List<ManagerDirectoryResponse> listAvailableManagers() {
+    public PageResponse<ManagerDirectoryResponse> listAvailableManagers(int page, int size) {
         requireAdministrator();
-        return userRepository.findByRoleAndActiveTrueOrderByFullNameAsc(Role.MANAGER).stream()
-                .map(this::mapDirectory)
-                .toList();
+        var pageable = Pagination.page(page, size, "fullName", "asc", java.util.Set.of("fullName"));
+        return PageResponse.from(userRepository.findByRoleAndActiveTrue(Role.MANAGER, pageable), this::mapDirectory);
     }
 
     private User requireAdministrator() {

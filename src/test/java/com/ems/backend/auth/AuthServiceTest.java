@@ -7,7 +7,8 @@ import com.ems.backend.auth.dto.SetPasswordRequest;
 import com.ems.backend.auth.dto.StartAccountSetupRequest;
 import com.ems.backend.auth.dto.VerifyPasswordOtpRequest;
 import com.ems.backend.common.SecurityUtils;
-import com.ems.backend.mail.EmailService;
+import com.ems.backend.outbox.OutboxEnqueueRequest;
+import com.ems.backend.outbox.OutboxService;
 import com.ems.backend.security.JwtService;
 import com.ems.backend.security.RequestMetadata;
 import com.ems.backend.security.SecurityAuditService;
@@ -24,6 +25,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Optional;
+import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -44,7 +46,7 @@ class AuthServiceTest {
     @Mock private LoginRateLimiter loginRateLimiter;
     @Mock private SecurityUtils securityUtils;
     @Mock private UserProfileService userProfileService;
-    @Mock private EmailService emailService;
+    @Mock private OutboxService outboxService;
     @Mock private StaffAuditEventRepository staffAuditEventRepository;
     @Mock private OtpRequestGuard otpRequestGuard;
     @Mock private OtpChallengeService otpChallengeService;
@@ -117,7 +119,7 @@ class AuthServiceTest {
         );
 
         verify(otpRequestGuard).checkIssuance("missing@example.com", REQUEST);
-        verify(emailService, never()).sendPasswordOtp(any(), any(), any(), any(Boolean.class));
+        verify(outboxService, never()).enqueue(any());
     }
 
     @Test
@@ -129,20 +131,15 @@ class AuthServiceTest {
         when(otpChallengeService.issue(user.getId(), OtpPurpose.ACCOUNT_SETUP, REQUEST))
                 .thenReturn(new OtpChallengeService.IssuedOtp(
                         user.getId(), user.getEmail(), user.getFullName(), "123456",
-                        OtpPurpose.ACCOUNT_SETUP, true
+                        OtpPurpose.ACCOUNT_SETUP, true, Instant.now(), Instant.now().plusSeconds(600)
                 ));
-        when(emailService.sendPasswordOtp(
-                user.getEmail(), user.getFullName(), "123456", true
-        )).thenReturn(true);
 
         service().startAccountSetup(
                 new StartAccountSetupRequest(user.getEmail(), "temporary-password"),
                 REQUEST
         );
 
-        verify(emailService).sendPasswordOtp(
-                user.getEmail(), user.getFullName(), "123456", true
-        );
+        verify(outboxService).enqueue(any(OutboxEnqueueRequest.class));
     }
 
     @Test
@@ -181,7 +178,7 @@ class AuthServiceTest {
                 loginRateLimiter,
                 securityUtils,
                 userProfileService,
-                emailService,
+                outboxService,
                 staffAuditEventRepository,
                 otpRequestGuard,
                 otpChallengeService,

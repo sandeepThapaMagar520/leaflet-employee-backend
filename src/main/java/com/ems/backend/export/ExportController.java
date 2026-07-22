@@ -12,7 +12,11 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
@@ -21,11 +25,17 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.io.BufferedWriter;
+import java.io.OutputStreamWriter;
+import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
 @RestController
 @RequestMapping("/api/v1/exports")
 @Tag(name = "Exports", description = "CSV export endpoints for attendance and daily logs")
 public class ExportController {
+    private static final int EXPORT_BATCH_SIZE = 100;
+    private static final int MAX_EXPORT_ROWS = 100_000;
+    private static final long MAX_EXPORT_DAYS = 366;
     private static final DateTimeFormatter CSV_DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneId.systemDefault());
 
@@ -76,44 +86,61 @@ public class ExportController {
     @GetMapping("/attendance")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "Export attendance CSV", description = "Exports visible attendance sessions. Optional from/to date filters use yyyy-MM-dd.")
-    public ResponseEntity<byte[]> exportAttendance(
+    public ResponseEntity<StreamingResponseBody> exportAttendance(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to
     ) {
-        List<AttendanceSessionResponse> sessions = attendanceSessionService.getSessionsForExport().stream()
-                .filter(session -> isWithinRange(LocalDate.ofInstant(session.startTime(), ZoneId.systemDefault()), from, to))
-                .toList();
-        StringBuilder csv = new StringBuilder("Employee,Start Time,End Time,Total Hours\n");
-        for (AttendanceSessionResponse session : sessions) {
-            csv.append(csvCell(session.userFullName())).append(',')
-                    .append(csvCell(CSV_DATE.format(session.startTime()))).append(',')
-                    .append(csvCell(session.endTime() != null ? CSV_DATE.format(session.endTime()) : "")).append(',')
-                    .append(csvCell(session.totalHours() != null ? session.totalHours().toPlainString() : ""))
-                    .append('\n');
-        }
-        return csvAttachment("attendance-export.csv", csv.toString());
+        requireSafeRange(from, to);
+        StreamingResponseBody body = output -> {
+            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8));
+            writer.write("Employee,Start Time,End Time,Total Hours\n");
+            int page = 0;
+            int written = 0;
+            boolean last;
+            do {
+                var batch = attendanceSessionService.getSessionsForExport(from, to, page++, EXPORT_BATCH_SIZE);
+                for (AttendanceSessionResponse session : batch.content()) {
+                    if (++written > MAX_EXPORT_ROWS) throw new IllegalStateException("Export row limit exceeded");
+                    writer.write(csvCell(session.userFullName()) + ","
+                            + csvCell(CSV_DATE.format(session.startTime())) + ","
+                            + csvCell(session.endTime() != null ? CSV_DATE.format(session.endTime()) : "") + ","
+                            + csvCell(session.totalHours() != null ? session.totalHours().toPlainString() : "") + "\n");
+                }
+                writer.flush();
+                last = batch.last();
+            } while (!last);
+        };
+        return csvStreamAttachment("attendance-export.csv", secured(body));
     }
 
     @GetMapping("/logs")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "Export daily logs CSV", description = "Exports visible daily logs. Optional from/to date filters use yyyy-MM-dd.")
-    public ResponseEntity<byte[]> exportLogs(
+    public ResponseEntity<StreamingResponseBody> exportLogs(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to
     ) {
-        List<DailyLogResponse> logs = dailyLogService.getLogsForExport().stream()
-                .filter(log -> isWithinRange(log.logDate(), from, to))
-                .toList();
-        StringBuilder csv = new StringBuilder("Employee,Log Date,Summary,Problems Faced,Created At\n");
-        for (DailyLogResponse log : logs) {
-            csv.append(csvCell(log.userFullName())).append(',')
-                    .append(csvCell(log.logDate().toString())).append(',')
-                    .append(csvCell(log.summary())).append(',')
-                    .append(csvCell(log.problemsFaced() != null ? log.problemsFaced() : "")).append(',')
-                    .append(csvCell(CSV_DATE.format(log.createdAt())))
-                    .append('\n');
-        }
-        return csvAttachment("daily-logs-export.csv", csv.toString());
+        requireSafeRange(from, to);
+        StreamingResponseBody body = output -> {
+            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8));
+            writer.write("Employee,Log Date,Summary,Problems Faced,Created At\n");
+            int page = 0;
+            int written = 0;
+            boolean last;
+            do {
+                var batch = dailyLogService.getLogsForExport(from, to, page++, EXPORT_BATCH_SIZE);
+                for (DailyLogResponse log : batch.content()) {
+                    if (++written > MAX_EXPORT_ROWS) throw new IllegalStateException("Export row limit exceeded");
+                    writer.write(csvCell(log.userFullName()) + "," + csvCell(log.logDate().toString()) + ","
+                            + csvCell(log.summary()) + ","
+                            + csvCell(log.problemsFaced() != null ? log.problemsFaced() : "") + ","
+                            + csvCell(CSV_DATE.format(log.createdAt())) + "\n");
+                }
+                writer.flush();
+                last = batch.last();
+            } while (!last);
+        };
+        return csvStreamAttachment("daily-logs-export.csv", secured(body));
     }
 
     private static ResponseEntity<byte[]> csvAttachment(String filename, String csv) {
@@ -124,21 +151,48 @@ public class ExportController {
                 .body(bytes);
     }
 
+    private static ResponseEntity<StreamingResponseBody> csvStreamAttachment(String filename, StreamingResponseBody body) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .contentType(new MediaType("text", "csv", StandardCharsets.UTF_8))
+                .body(body);
+    }
+
+    private static StreamingResponseBody secured(StreamingResponseBody delegate) {
+        SecurityContext captured = SecurityContextHolder.createEmptyContext();
+        captured.setAuthentication(SecurityContextHolder.getContext().getAuthentication());
+        return output -> {
+            SecurityContext previous = SecurityContextHolder.getContext();
+            try {
+                SecurityContextHolder.setContext(captured);
+                delegate.writeTo(output);
+            } finally {
+                SecurityContextHolder.setContext(previous);
+            }
+        };
+    }
+
     private static String csvCell(String value) {
         if (value == null) {
             return "\"\"";
         }
-        return "\"" + value.replace("\"", "\"\"") + "\"";
+        String escaped = value;
+        if (!escaped.isEmpty() && "=+-@".indexOf(escaped.charAt(0)) >= 0) {
+            escaped = "'" + escaped;
+        }
+        return "\"" + escaped.replace("\"", "\"\"") + "\"";
     }
 
     private static String csvRow(String section, String field, String value) {
         return csvCell(section) + "," + csvCell(field) + "," + csvCell(value) + "\n";
     }
 
-    private static boolean isWithinRange(LocalDate date, LocalDate from, LocalDate to) {
-        if (from != null && date.isBefore(from)) {
-            return false;
+    private static void requireSafeRange(LocalDate from, LocalDate to) {
+        if (from == null || to == null) {
+            throw new ResponseStatusException(BAD_REQUEST, "from and to are required for exports");
         }
-        return to == null || !date.isAfter(to);
+        if (to.isBefore(from) || java.time.temporal.ChronoUnit.DAYS.between(from, to) > MAX_EXPORT_DAYS) {
+            throw new ResponseStatusException(BAD_REQUEST, "Export date range must be valid and at most 366 days");
+        }
     }
 }

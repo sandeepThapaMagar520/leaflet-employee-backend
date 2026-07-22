@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @Getter
 @Setter
@@ -31,6 +32,12 @@ public class Notification {
     private String message;
 
     private String link;
+
+    @Column(name = "event_id")
+    private UUID eventId;
+
+    @Column(name = "event_type", length = 100)
+    private String eventType;
 
     @Column(nullable = false)
     private boolean read = false;

@@ -1,10 +1,12 @@
 package com.ems.backend.task;
 
 import com.ems.backend.common.PageResponse;
+import com.ems.backend.common.Pagination;
 import com.ems.backend.common.ProjectAccessService;
 import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.notification.NotificationService;
 import com.ems.backend.notification.NotificationType;
+import com.ems.backend.notification.EventIds;
 import com.ems.backend.project.Project;
 import com.ems.backend.project.ProjectStatus;
 import com.ems.backend.project.ProjectTaskBoardRepository;
@@ -98,12 +100,16 @@ public class TaskService {
         task.setCreatedBy(currentUser);
 
         Task saved = taskRepository.save(task);
-        notificationService.notifyUserDatabaseOnly(
+        notificationService.notifyUserEvent(
+                EventIds.stable("TASK_ASSIGNED", saved.getId(), assignee.getId(), saved.getVersion()),
+                "TASK_ASSIGNED",
                 assignee,
                 NotificationType.TASK_ASSIGNED,
                 "New task assigned",
                 "You were assigned \"" + saved.getTitle() + "\" on " + project.getName(),
-                "/tasks"
+                "/tasks",
+                true,
+                java.util.Map.of("resourceId", saved.getId())
         );
         return map(saved);
     }
@@ -118,20 +124,34 @@ public class TaskService {
         return tasks.stream().map(this::map).toList();
     }
 
-    public PageResponse<TaskResponse> getAllTasksPaged(int page, int size) {
-        List<TaskResponse> all = getAllTasks();
-        return PageResponse.of(all, page, size);
+    @Transactional(readOnly = true)
+    public PageResponse<TaskResponse> getAllTasksPaged(int page, int size, String sortBy, String sortDir) {
+        User currentUser = getCurrentUser();
+        var pageable = Pagination.page(page, size, sortBy, sortDir,
+                Set.of("createdAt", "updatedAt", "dueDate", "priority", "status", "title"));
+        var tasks = switch (currentUser.getRole()) {
+            case ADMIN -> taskRepository.findAllWithDetails(pageable);
+            case MANAGER -> taskRepository.findByProjectManagerId(currentUser.getId(), pageable);
+            case EMPLOYEE -> taskRepository.findByAssignedToIdWithDetails(currentUser.getId(), pageable);
+        };
+        return PageResponse.from(tasks, this::map);
     }
 
-    public List<TaskResponse> getTasksByProject(Long projectId) {
+    @Transactional(readOnly = true)
+    public PageResponse<TaskResponse> getTasksByProject(Long projectId, int page, int size, String sortBy, String sortDir) {
         User currentUser = getCurrentUser();
         projectAccessService.requireAccessibleProject(projectId, currentUser);
-        return taskRepository.findByProjectId(projectId).stream().map(this::map).toList();
+        var pageable = Pagination.page(page, size, sortBy, sortDir,
+                Set.of("createdAt", "updatedAt", "dueDate", "priority", "status", "title"));
+        return PageResponse.from(taskRepository.findByProjectId(projectId, pageable), this::map);
     }
 
-    public List<TaskResponse> getMyTasks() {
-        String email = securityUtils.getCurrentUserEmail();
-        return taskRepository.findByAssignedToEmailIgnoreCase(email).stream().map(this::map).toList();
+    @Transactional(readOnly = true)
+    public PageResponse<TaskResponse> getMyTasks(int page, int size, String sortBy, String sortDir) {
+        Long userId = getCurrentUser().getId();
+        var pageable = Pagination.page(page, size, sortBy, sortDir,
+                Set.of("createdAt", "updatedAt", "dueDate", "priority", "status", "title"));
+        return PageResponse.from(taskRepository.findByAssignedToIdWithDetails(userId, pageable), this::map);
     }
 
     @Transactional(readOnly = true)
@@ -164,12 +184,16 @@ public class TaskService {
         Task saved = taskRepository.save(task);
         auditStatusChange(currentUser, saved, previousStatus);
         if (!previousAssigneeId.equals(assignee.getId())) {
-            notificationService.notifyUserDatabaseOnly(
+            notificationService.notifyUserEvent(
+                    EventIds.stable("TASK_REASSIGNED", saved.getId(), assignee.getId(), saved.getVersion()),
+                    "TASK_REASSIGNED",
                     assignee,
                     NotificationType.TASK_ASSIGNED,
                     "Task reassigned to you",
                     "\"" + saved.getTitle() + "\" on " + saved.getProject().getName(),
-                    "/tasks"
+                    "/tasks",
+                    true,
+                    java.util.Map.of("resourceId", saved.getId())
             );
         }
         return map(saved);
@@ -204,12 +228,15 @@ public class TaskService {
 
         if (!TaskStatus.DONE.name().equals(previousStatus) && TaskStatus.DONE.name().equals(saved.getStatus())
                 && !saved.getCreatedBy().getId().equals(currentUser.getId())) {
-            notificationService.notifyUserDatabaseOnly(
+            notificationService.notifyUserEvent(
+                    EventIds.stable("TASK_COMPLETED", saved.getId(), saved.getVersion()),
+                    "TASK_COMPLETED",
                     saved.getCreatedBy(),
                     NotificationType.TASK_COMPLETED,
                     "Task completed",
                     currentUser.getFullName() + " completed \"" + saved.getTitle() + "\"",
-                    "/tasks"
+                    "/tasks",
+                    true
             );
         }
         return map(saved);
@@ -228,13 +255,12 @@ public class TaskService {
     }
 
     @Transactional(readOnly = true)
-    public List<TaskCommentResponse> getTaskComments(Long taskId) {
+    public PageResponse<TaskCommentResponse> getTaskComments(Long taskId, int page, int size) {
         Task task = getTaskById(taskId);
         User currentUser = getCurrentUser();
         projectAccessService.requireAccessibleProject(task.getProject().getId(), currentUser);
-        return taskCommentRepository.findByTaskIdOrderByCreatedAtDesc(taskId).stream()
-                .map(this::mapComment)
-                .toList();
+        var pageable = Pagination.page(page, size, "createdAt", "desc", Set.of("createdAt"));
+        return PageResponse.from(taskCommentRepository.findByTaskId(taskId, pageable), this::mapComment);
     }
 
     public TaskCommentResponse addTaskComment(Long taskId, CreateTaskCommentRequest request) {
@@ -266,24 +292,30 @@ public class TaskService {
 
         Set<User> mentionedUsers = resolveMentionedUsers(task.getProject(), request.mentionedUserIds(), currentUser);
         for (User mentionedUser : mentionedUsers) {
-            notificationService.notifyUserDatabaseOnly(
+            notificationService.notifyUserEvent(
+                    EventIds.stable("TASK_MENTION", saved.getId(), mentionedUser.getId()),
+                    "TASK_MENTION",
                     mentionedUser,
                     NotificationType.TASK_COMMENTED,
                     "You were mentioned",
                     currentUser.getFullName() + " mentioned you on \"" + task.getTitle() + "\"",
-                    "/projects/" + task.getProject().getId()
+                    "/projects/" + task.getProject().getId(),
+                    true
             );
         }
 
         boolean assigneeAlreadyMentioned = mentionedUsers.stream()
                 .anyMatch(user -> user.getId().equals(task.getAssignedTo().getId()));
         if (!assigneeAlreadyMentioned && !task.getAssignedTo().getId().equals(currentUser.getId())) {
-            notificationService.notifyUserDatabaseOnly(
+            notificationService.notifyUserEvent(
+                    EventIds.stable("TASK_COMMENT", saved.getId(), task.getAssignedTo().getId()),
+                    "TASK_COMMENT",
                     task.getAssignedTo(),
                     NotificationType.TASK_COMMENTED,
                     "New task comment",
                     currentUser.getFullName() + " commented on \"" + task.getTitle() + "\"",
-                    "/projects/" + task.getProject().getId()
+                    "/projects/" + task.getProject().getId(),
+                    true
             );
         }
 

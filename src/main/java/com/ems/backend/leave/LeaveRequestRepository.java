@@ -4,6 +4,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.Lock;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -17,6 +19,14 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long
 
     @Query("select request from LeaveRequest request join fetch request.user left join fetch request.reviewer where request.user.id = :userId order by request.createdAt desc")
     List<LeaveRequest> findByUserIdOrderByCreatedAtDesc(Long userId);
+
+    @Query(value = "select request from LeaveRequest request join fetch request.user left join fetch request.reviewer where request.user.id = :userId",
+            countQuery = "select count(request) from LeaveRequest request where request.user.id = :userId")
+    Page<LeaveRequest> findByUserId(Long userId, Pageable pageable);
+
+    @Query(value = "select request from LeaveRequest request join fetch request.user left join fetch request.reviewer",
+            countQuery = "select count(request) from LeaveRequest request")
+    Page<LeaveRequest> findAllWithDetails(Pageable pageable);
 
     @Query("""
             select request from LeaveRequest request
@@ -32,6 +42,19 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long
             order by request.createdAt desc
             """)
     List<LeaveRequest> findVisibleToManager(Long managerId);
+
+    @Query(value = """
+            select request from LeaveRequest request join fetch request.user left join fetch request.reviewer
+            where request.user.id = :managerId or exists (
+                select scope.id from ManagerEmployeeScope scope where scope.manager.id = :managerId
+                and scope.employee.id = request.user.id and scope.active = true)
+            """, countQuery = """
+            select count(request) from LeaveRequest request
+            where request.user.id = :managerId or exists (
+                select scope.id from ManagerEmployeeScope scope where scope.manager.id = :managerId
+                and scope.employee.id = request.user.id and scope.active = true)
+            """)
+    Page<LeaveRequest> findVisibleToManager(Long managerId, Pageable pageable);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""

@@ -19,6 +19,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -45,7 +46,7 @@ class DatabaseIntegrityMigrationTest {
         flyway.clean();
         flyway.migrate();
 
-        assertEquals("38", flyway.info().current().getVersion().getVersion());
+        assertEquals("40", flyway.info().current().getVersion().getVersion());
         assertTrue(flyway.validateWithResult().validationSuccessful);
         assertEquals(7, scalar("""
                 SELECT COUNT(*) FROM pg_indexes
@@ -206,6 +207,91 @@ class DatabaseIntegrityMigrationTest {
                 ) VALUES (?, 25, CURRENT_TIMESTAMP, ?, ?::uuid)
                 """, projectId, adminId, idempotencyKey));
         assertEquals(1, paymentWinners);
+    }
+
+    @Test
+    void outboxIdentityAndSkipLockedClaimingArePostgresEnforced() throws Exception {
+        Flyway flyway = latestFlyway();
+        flyway.clean();
+        flyway.migrate();
+        long userId = insertUser("outbox-integrity@example.test");
+        UUID eventId = UUID.randomUUID();
+        insertOutbox(UUID.randomUUID(), eventId, userId, 10, "one");
+        assertThrows(SQLException.class, () -> insertOutbox(UUID.randomUUID(), eventId, userId, 10, "duplicate"));
+        insertOutbox(UUID.randomUUID(), UUID.randomUUID(), userId, 5, "two");
+
+        try (Connection first = connection(); Connection second = connection()) {
+            first.setAutoCommit(false);
+            second.setAutoCommit(false);
+            UUID firstId = claimOne(first);
+            UUID secondId = claimOne(second);
+            assertTrue(firstId != null && secondId != null && !firstId.equals(secondId));
+            first.rollback();
+            second.rollback();
+        }
+
+        execute("""
+                INSERT INTO notifications(user_id,type,title,message,read,created_at)
+                VALUES (?, 'SYSTEM', 'Legacy', 'Still readable', FALSE, CURRENT_TIMESTAMP)
+                """, userId);
+        assertEquals(1, scalar("SELECT count(*) FROM notifications WHERE event_id IS NULL"));
+    }
+
+    @Test
+    void domainAndOutboxRowsRollbackTogether() throws Exception {
+        Flyway flyway = latestFlyway();
+        flyway.clean();
+        flyway.migrate();
+        UUID eventId = UUID.randomUUID();
+        try (Connection connection = connection()) {
+            connection.setAutoCommit(false);
+            long userId;
+            try (PreparedStatement user = connection.prepareStatement("""
+                    INSERT INTO users(full_name,email,password,role,active)
+                    VALUES ('Transactional User','transactional-outbox@example.test','{disabled}','EMPLOYEE',TRUE)
+                    RETURNING id
+                    """); ResultSet result = user.executeQuery()) {
+                assertTrue(result.next());
+                userId = result.getLong(1);
+            }
+            try (PreparedStatement outbox = connection.prepareStatement("""
+                    INSERT INTO outbox_messages(id,event_id,event_type,channel,recipient_user_id,
+                        recipient_address_hash,recipient_address_ciphertext,template_key,payload_ciphertext,
+                        max_attempts,idempotency_key)
+                    VALUES (?,?, 'ACCOUNT_SETUP','EMAIL',?,'hash',decode('01','hex'),
+                        'ACCOUNT_SETUP',decode('02','hex'),6,?)
+                    """)) {
+                outbox.setObject(1, UUID.randomUUID());
+                outbox.setObject(2, eventId);
+                outbox.setLong(3, userId);
+                outbox.setString(4, eventId.toString());
+                outbox.executeUpdate();
+            }
+            connection.rollback();
+        }
+        assertEquals(0, scalar("SELECT count(*) FROM users WHERE email='transactional-outbox@example.test'"));
+        assertEquals(0, scalar("SELECT count(*) FROM outbox_messages WHERE event_id='" + eventId + "'::uuid"));
+    }
+
+    private void insertOutbox(UUID id, UUID eventId, long userId, int priority, String suffix) throws SQLException {
+        execute("""
+                INSERT INTO outbox_messages(id,event_id,event_type,channel,recipient_user_id,
+                    recipient_address_hash,recipient_address_ciphertext,template_key,payload_ciphertext,
+                    max_attempts,priority,idempotency_key)
+                VALUES (?,?,'TEST_EVENT','EMAIL',?,'hash',decode('01','hex'),'IN_APP_NOTIFICATION',
+                    decode('02','hex'),6,?,?)
+                """, id, eventId, userId, priority, eventId + ":EMAIL:" + suffix);
+    }
+
+    private UUID claimOne(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT id FROM outbox_messages WHERE status='PENDING' AND available_at <= CURRENT_TIMESTAMP
+                ORDER BY priority DESC,created_at FOR UPDATE SKIP LOCKED LIMIT 1
+                """)) {
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? result.getObject(1, UUID.class) : null;
+            }
+        }
     }
 
     private int runConcurrently(SqlMutation mutation) throws Exception {

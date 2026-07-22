@@ -1,7 +1,13 @@
 package com.ems.backend.notification;
 
+import com.ems.backend.common.PageResponse;
+import com.ems.backend.common.Pagination;
+
 import com.ems.backend.common.SecurityUtils;
-import com.ems.backend.mail.EmailService;
+import com.ems.backend.outbox.DeliveryStatus;
+import com.ems.backend.outbox.OutboxEnqueueRequest;
+import com.ems.backend.outbox.OutboxService;
+import com.ems.backend.security.RequestMetadata;
 import com.ems.backend.notification.dto.NotificationResponse;
 import com.ems.backend.user.User;
 import com.ems.backend.user.UserProfileService;
@@ -11,6 +17,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
@@ -21,30 +29,24 @@ public class NotificationService {
     private final UserRepository userRepository;
     private final SecurityUtils securityUtils;
     private final UserProfileService userProfileService;
-    private final EmailService emailService;
+    private final OutboxService outboxService;
 
     public NotificationService(
             NotificationRepository notificationRepository,
             UserRepository userRepository,
             SecurityUtils securityUtils,
             UserProfileService userProfileService,
-            EmailService emailService
+            OutboxService outboxService
     ) {
         this.notificationRepository = notificationRepository;
         this.userRepository = userRepository;
         this.securityUtils = securityUtils;
         this.userProfileService = userProfileService;
-        this.emailService = emailService;
+        this.outboxService = outboxService;
     }
 
     public void notifyUser(User user, NotificationType type, String title, String message, String link) {
-        if (!persistNotification(user, type, title, message, link)) {
-            return;
-        }
-
-        if (userProfileService.shouldEmailForNotification(user, type)) {
-            emailService.sendNotificationEmail(user.getEmail(), type, title, message, link);
-        }
+        notifyUserEvent(UUID.randomUUID(), type.name(), user, type, title, message, link, true);
     }
 
     /**
@@ -58,11 +60,52 @@ public class NotificationService {
             String message,
             String link
     ) {
-        persistNotification(user, type, title, message, link);
+        notifyUserEvent(UUID.randomUUID(), type.name(), user, type, title, message, link, false);
+    }
+
+    public DeliveryStatus notifyUserEvent(
+            UUID eventId, String eventType, User user, NotificationType type,
+            String title, String message, String link, boolean emailAdvisory
+    ) {
+        return notifyUserEvent(eventId, eventType, user, type, title, message, link, emailAdvisory, Map.of());
+    }
+
+    public DeliveryStatus notifyUserEvent(
+            UUID eventId, String eventType, User user, NotificationType type,
+            String title, String message, String link, boolean emailAdvisory,
+            Map<String, Object> eligibilityContext
+    ) {
+        String safeTitle = limit(title, 160);
+        String safeMessage = limit(message, 1000);
+        String validatedLink = safeLink(link);
+        if (!persistNotification(eventId, eventType, user, type, safeTitle, safeMessage, validatedLink)) {
+            return DeliveryStatus.QUEUED;
+        }
+        if (!emailAdvisory) return DeliveryStatus.NOT_REQUIRED;
+        Map<String, Object> payload = new java.util.HashMap<>(eligibilityContext);
+        payload.put("fullName", limit(user.getFullName(), 160));
+        payload.put("title", safeTitle);
+        payload.put("message", safeMessage);
+        payload.put("link", validatedLink == null ? "" : validatedLink);
+        payload.put("notificationType", type.name());
+        OutboxEnqueueRequest delivery = new OutboxEnqueueRequest(
+                eventId, eventType, user.getId(), user.getEmail(), "IN_APP_NOTIFICATION",
+                payload,
+                false, null, 0, correlationId()
+        );
+        if (!userProfileService.shouldEmailForNotification(user, type, eventType)) {
+            return outboxService.recordSuppressed(delivery);
+        }
+        return outboxService.enqueue(delivery);
+    }
+
+    private String correlationId() {
+        RequestMetadata metadata = RequestMetadata.current();
+        return metadata == null ? null : metadata.correlationId();
     }
 
     private boolean persistNotification(
-            User user,
+            UUID eventId, String eventType, User user,
             NotificationType type,
             String title,
             String message,
@@ -71,17 +114,30 @@ public class NotificationService {
         if (user == null || Boolean.FALSE.equals(user.getActive())) {
             return false;
         }
-        if (notificationRepository.existsByUser_IdAndTypeAndLinkAndTitle(user.getId(), type, link, title)) {
+        if (notificationRepository.existsByEventIdAndUser_Id(eventId, user.getId())) {
             return false;
         }
         Notification notification = new Notification();
         notification.setUser(user);
         notification.setType(type);
-        notification.setTitle(title);
-        notification.setMessage(message);
-        notification.setLink(link);
+        notification.setTitle(limit(title, 160));
+        notification.setMessage(limit(message, 1000));
+        notification.setLink(safeLink(link));
+        notification.setEventId(eventId);
+        notification.setEventType(eventType);
         notificationRepository.save(notification);
         return true;
+    }
+
+    private String safeLink(String link) {
+        if (link == null) return null;
+        String value = limit(link.trim(), 500);
+        return value.startsWith("/") && !value.startsWith("//") ? value : null;
+    }
+
+    private String limit(String value, int maximum) {
+        if (value == null) return "";
+        return value.substring(0, Math.min(maximum, value.length()));
     }
 
     public void notifyUserId(Long userId, NotificationType type, String title, String message, String link) {
@@ -89,11 +145,10 @@ public class NotificationService {
     }
 
     @Transactional(readOnly = true)
-    public List<NotificationResponse> getMyNotifications() {
+    public PageResponse<NotificationResponse> getMyNotifications(int page, int size) {
         User currentUser = securityUtils.getCurrentUser();
-        return notificationRepository.findByUserIdOrderByCreatedAtDesc(currentUser.getId()).stream()
-                .map(this::map)
-                .toList();
+        var pageable = Pagination.page(page, size, "createdAt", "desc", java.util.Set.of("createdAt"));
+        return PageResponse.from(notificationRepository.findByUserId(currentUser.getId(), pageable), this::map);
     }
 
     @Transactional(readOnly = true)

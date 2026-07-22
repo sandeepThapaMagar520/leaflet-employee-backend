@@ -2,6 +2,7 @@ package com.ems.backend.task;
 
 import com.ems.backend.notification.NotificationService;
 import com.ems.backend.notification.NotificationType;
+import com.ems.backend.notification.EventIds;
 import com.ems.backend.time.BusinessClock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -32,20 +33,26 @@ public class TaskReminderService {
 
         for (Task task : taskRepository.findByStatusNotAndDueDateIsNotNull(TaskStatus.DONE.name())) {
             if (task.getDueDate().isBefore(today)) {
-                notificationService.notifyUser(
+                notificationService.notifyUserEvent(
+                        EventIds.stable("TASK_OVERDUE_REMINDER", task.getId(), today),
+                        "TASK_OVERDUE_REMINDER",
                         task.getAssignedTo(),
                         NotificationType.TASK_OVERDUE,
                         reminderTitle(task, "overdue"),
                         "\"" + task.getTitle() + "\" was due " + overdueDays(task, today) + " ago. Priority: " + task.getPriority() + ".",
-                        "/projects/" + task.getProject().getId()
+                        "/projects/" + task.getProject().getId(),
+                        true
                 );
             } else if (!task.getDueDate().isAfter(tomorrow)) {
-                notificationService.notifyUser(
+                notificationService.notifyUserEvent(
+                        EventIds.stable("TASK_DUE_REMINDER", task.getId(), today),
+                        "TASK_DUE_REMINDER",
                         task.getAssignedTo(),
                         NotificationType.TASK_DUE_SOON,
                         reminderTitle(task, task.getDueDate().isEqual(today) ? "due today" : "due soon"),
                         "\"" + task.getTitle() + "\" is due " + dueLabel(task, today) + ". Priority: " + task.getPriority() + ".",
-                        "/projects/" + task.getProject().getId()
+                        "/projects/" + task.getProject().getId(),
+                        true
                 );
             }
         }

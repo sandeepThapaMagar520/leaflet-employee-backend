@@ -115,9 +115,11 @@ public class UserController {
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "List users", description = "Admins and managers can list staff. Optional page, size, and search parameters return a filtered paged response.")
-    public Object getAllUsers(
-            @RequestParam(required = false) Integer page,
-            @RequestParam(required = false) Integer size,
+    public PageResponse<?> getAllUsers(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "fullName") String sortBy,
+            @RequestParam(defaultValue = "asc") String sortDir,
             @RequestParam(required = false) String search,
             @RequestParam(required = false) Role role,
             @RequestParam(required = false) Boolean active,
@@ -126,10 +128,11 @@ public class UserController {
             @RequestParam(required = false) String department,
             @RequestParam(defaultValue = "false") boolean incompleteOnly
     ) {
-        if (page != null || size != null) {
-            return userService.getVisibleUsersPaged(
-                    page != null ? page : 0,
-                    size != null ? size : 20,
+        return (PageResponse<?>) userService.getVisibleUsersPaged(
+                    page,
+                    size,
+                    sortBy,
+                    sortDir,
                     search,
                     role,
                     active,
@@ -138,8 +141,6 @@ public class UserController {
                     department,
                     incompleteOnly
             );
-        }
-        return userService.getVisibleUsers();
     }
 
     @GetMapping("/summary")

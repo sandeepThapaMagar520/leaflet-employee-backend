@@ -1,7 +1,9 @@
 package com.ems.backend.user;
 
 import com.ems.backend.common.SecurityUtils;
-import com.ems.backend.mail.EmailService;
+import com.ems.backend.notification.EventIds;
+import com.ems.backend.outbox.OutboxEnqueueRequest;
+import com.ems.backend.outbox.OutboxService;
 import com.ems.backend.auth.EmailVerificationTokenService;
 import com.ems.backend.media.MediaAsset;
 import com.ems.backend.media.MediaAttachmentService;
@@ -14,6 +16,7 @@ import com.ems.backend.user.dto.UpdateProfileRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import java.util.Map;
 
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
@@ -24,7 +27,7 @@ public class UserProfileService {
     private final UserRepository userRepository;
     private final UserNotificationSettingsRepository notificationSettingsRepository;
     private final SecurityUtils securityUtils;
-    private final EmailService emailService;
+    private final OutboxService outboxService;
     private final EmailVerificationTokenService emailVerificationTokenService;
     private final MediaAttachmentService mediaAttachmentService;
 
@@ -32,14 +35,14 @@ public class UserProfileService {
             UserRepository userRepository,
             UserNotificationSettingsRepository notificationSettingsRepository,
             SecurityUtils securityUtils,
-            EmailService emailService,
+            OutboxService outboxService,
             EmailVerificationTokenService emailVerificationTokenService,
             MediaAttachmentService mediaAttachmentService
     ) {
         this.userRepository = userRepository;
         this.notificationSettingsRepository = notificationSettingsRepository;
         this.securityUtils = securityUtils;
-        this.emailService = emailService;
+        this.outboxService = outboxService;
         this.emailVerificationTokenService = emailVerificationTokenService;
         this.mediaAttachmentService = mediaAttachmentService;
     }
@@ -108,21 +111,23 @@ public class UserProfileService {
         if (request.emailTaskOverdue() != null) settings.setEmailTaskOverdue(request.emailTaskOverdue());
         if (request.emailProjectAssigned() != null) settings.setEmailProjectAssigned(request.emailProjectAssigned());
         if (request.emailLeaveUpdates() != null) settings.setEmailLeaveUpdates(request.emailLeaveUpdates());
+        if (request.emailAttendanceUpdates() != null) settings.setEmailAttendanceUpdates(request.emailAttendanceUpdates());
 
         return mapPreferences(notificationSettingsRepository.save(settings));
     }
 
+    @Transactional
     public void issueVerificationEmail(User user) {
         EmailVerificationTokenService.IssuedVerification issued =
                 emailVerificationTokenService.issue(user.getId());
-        if (issued == null || !emailService.sendVerificationEmail(
-                issued.email(), issued.fullName(), issued.rawToken()
-        )) {
-            throw new ResponseStatusException(
-                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-                    "Verification state was created, but the email could not be delivered."
-            );
-        }
+        if (issued == null) throw new ResponseStatusException(BAD_REQUEST, "Verification cannot be issued.");
+        RequestMetadata metadata = RequestMetadata.current();
+        outboxService.enqueue(new OutboxEnqueueRequest(
+                EventIds.stable("EMAIL_VERIFICATION", issued.userId(), issued.expiresAt()),
+                "EMAIL_VERIFICATION", issued.userId(), issued.email(), "EMAIL_VERIFICATION",
+                Map.of("fullName", issued.fullName(), "token", issued.rawToken()), true,
+                issued.expiresAt(), 100, metadata == null ? null : metadata.correlationId()
+        ));
     }
 
     public void resendVerificationEmail() {
@@ -150,7 +155,7 @@ public class UserProfileService {
                 });
     }
 
-    public boolean shouldEmailForNotification(User user, com.ems.backend.notification.NotificationType type) {
+    public boolean shouldEmailForNotification(User user, com.ems.backend.notification.NotificationType type, String eventType) {
         if (!Boolean.TRUE.equals(user.getEmailVerified())) {
             return false;
         }
@@ -162,7 +167,9 @@ public class UserProfileService {
             case TASK_DUE_SOON -> Boolean.TRUE.equals(settings.getEmailTaskDueSoon());
             case TASK_OVERDUE -> Boolean.TRUE.equals(settings.getEmailTaskOverdue());
             case PROJECT_ASSIGNED -> Boolean.TRUE.equals(settings.getEmailProjectAssigned());
-            case SYSTEM -> Boolean.TRUE.equals(settings.getEmailLeaveUpdates());
+            case SYSTEM -> eventType.startsWith("ATTENDANCE_")
+                    ? Boolean.TRUE.equals(settings.getEmailAttendanceUpdates())
+                    : Boolean.TRUE.equals(settings.getEmailLeaveUpdates());
         };
     }
 
@@ -200,7 +207,8 @@ public class UserProfileService {
                 Boolean.TRUE.equals(settings.getEmailTaskDueSoon()),
                 Boolean.TRUE.equals(settings.getEmailTaskOverdue()),
                 Boolean.TRUE.equals(settings.getEmailProjectAssigned()),
-                Boolean.TRUE.equals(settings.getEmailLeaveUpdates())
+                Boolean.TRUE.equals(settings.getEmailLeaveUpdates()),
+                Boolean.TRUE.equals(settings.getEmailAttendanceUpdates())
         );
     }
 }

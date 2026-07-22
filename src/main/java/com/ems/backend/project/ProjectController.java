@@ -32,14 +32,13 @@ public class ProjectController {
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List projects", description = "Returns visible projects. Optional page and size parameters return a paged response.")
-    public Object getAllProjects(
-            @RequestParam(required = false) Integer page,
-            @RequestParam(required = false) Integer size
+    public PageResponse<ProjectResponse> getAllProjects(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortDir
     ) {
-        if (page != null || size != null) {
-            return projectService.getAllProjectsPaged(page != null ? page : 0, size != null ? size : 20);
-        }
-        return projectService.getAllProjects();
+        return projectService.getAllProjectsPaged(page, size, sortBy, sortDir);
     }
 
     @GetMapping("/{projectId}")
@@ -97,8 +96,12 @@ public class ProjectController {
     @GetMapping("/{projectId}/payments")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "List project payments")
-    public List<PaymentResponse> listPayments(@PathVariable Long projectId) {
-        return projectService.listPayments(projectId);
+    public PageResponse<PaymentResponse> listPayments(
+            @PathVariable Long projectId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size
+    ) {
+        return projectService.listPayments(projectId, page, size);
     }
 
     @PostMapping("/{projectId}/payments")
@@ -125,11 +128,13 @@ public class ProjectController {
     @GetMapping("/{projectId}/notes")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List project notes", description = "Returns project notes, optionally filtered by note type.")
-    public List<ProjectNoteResponse> listNotes(
+    public PageResponse<ProjectNoteResponse> listNotes(
             @PathVariable Long projectId,
-            @RequestParam(required = false) ProjectNoteType type
+            @RequestParam(required = false) ProjectNoteType type,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size
     ) {
-        return projectService.listNotes(projectId, type);
+        return projectService.listNotes(projectId, type, page, size);
     }
 
     @PostMapping("/{projectId}/notes")

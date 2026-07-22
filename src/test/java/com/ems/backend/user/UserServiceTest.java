@@ -12,6 +12,11 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 
 @ExtendWith(MockitoExtension.class)
 class UserServiceTest {
@@ -39,7 +44,9 @@ class UserServiceTest {
         completeManager.setDepartment("Engineering");
         completeManager.setLocation("Kathmandu");
 
-        when(userRepository.findAll()).thenReturn(List.of(incompleteInvite, completeManager));
+        when(userRepository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(incompleteInvite)));
+        when(userRepository.findAll(any(Sort.class))).thenReturn(List.of(incompleteInvite, completeManager));
 
         var filtered = userService.getUsersPaged(
                 0, 20, "", null, null, AccountStatus.INVITE_SENT, null, null, true

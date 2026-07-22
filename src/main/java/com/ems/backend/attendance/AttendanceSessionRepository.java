@@ -5,6 +5,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
 import java.util.List;
@@ -14,6 +16,10 @@ import java.util.Optional;
 public interface AttendanceSessionRepository extends JpaRepository<AttendanceSession, Long> {
     @Query("select session from AttendanceSession session join fetch session.user where lower(session.user.email) = lower(:email) order by session.startTime desc")
     List<AttendanceSession> findByUserEmailIgnoreCaseOrderByStartTimeDesc(String email);
+
+    @Query(value = "select session from AttendanceSession session join fetch session.user where session.user.id = :userId",
+            countQuery = "select count(session) from AttendanceSession session where session.user.id = :userId")
+    Page<AttendanceSession> findByUserId(Long userId, Pageable pageable);
 
     @Query("select session from AttendanceSession session join fetch session.user where session.user.id = :userId and session.endTime is null")
     List<AttendanceSession> findByUserIdAndEndTimeIsNull(Long userId);
@@ -45,6 +51,10 @@ public interface AttendanceSessionRepository extends JpaRepository<AttendanceSes
     @Query("select session from AttendanceSession session join fetch session.user order by session.startTime desc")
     List<AttendanceSession> findAllByOrderByStartTimeDesc();
 
+    @Query(value = "select session from AttendanceSession session join fetch session.user where session.user.role <> com.ems.backend.user.Role.ADMIN",
+            countQuery = "select count(session) from AttendanceSession session where session.user.role <> com.ems.backend.user.Role.ADMIN")
+    Page<AttendanceSession> findAllNonAdmin(Pageable pageable);
+
     @Query("""
             select session from AttendanceSession session join fetch session.user
             where exists (
@@ -56,6 +66,45 @@ public interface AttendanceSessionRepository extends JpaRepository<AttendanceSes
             order by session.startTime desc
             """)
     List<AttendanceSession> findVisibleToManager(Long managerId);
+
+    @Query(value = """
+            select session from AttendanceSession session join fetch session.user
+            where exists (select scope.id from ManagerEmployeeScope scope
+                where scope.manager.id = :managerId and scope.employee.id = session.user.id and scope.active = true)
+            """, countQuery = """
+            select count(session) from AttendanceSession session
+            where exists (select scope.id from ManagerEmployeeScope scope
+                where scope.manager.id = :managerId and scope.employee.id = session.user.id and scope.active = true)
+            """)
+    Page<AttendanceSession> findVisibleToManager(Long managerId, Pageable pageable);
+
+    @Query(value = """
+            select session from AttendanceSession session join fetch session.user
+            where session.user.role <> com.ems.backend.user.Role.ADMIN
+              and session.startTime >= :from and session.startTime < :to
+            """, countQuery = """
+            select count(session) from AttendanceSession session
+            where session.user.role <> com.ems.backend.user.Role.ADMIN
+              and session.startTime >= :from and session.startTime < :to
+            """)
+    Page<AttendanceSession> findAllNonAdminBetween(Instant from, Instant to, Pageable pageable);
+
+    @Query(value = """
+            select session from AttendanceSession session join fetch session.user
+            where session.startTime >= :from and session.startTime < :to and exists (
+                select scope.id from ManagerEmployeeScope scope where scope.manager.id = :managerId
+                and scope.employee.id = session.user.id and scope.active = true)
+            """, countQuery = """
+            select count(session) from AttendanceSession session
+            where session.startTime >= :from and session.startTime < :to and exists (
+                select scope.id from ManagerEmployeeScope scope where scope.manager.id = :managerId
+                and scope.employee.id = session.user.id and scope.active = true)
+            """)
+    Page<AttendanceSession> findVisibleToManagerBetween(Long managerId, Instant from, Instant to, Pageable pageable);
+
+    @Query(value = "select session from AttendanceSession session join fetch session.user where session.user.id = :userId and session.startTime >= :from and session.startTime < :to",
+            countQuery = "select count(session) from AttendanceSession session where session.user.id = :userId and session.startTime >= :from and session.startTime < :to")
+    Page<AttendanceSession> findByUserIdBetween(Long userId, Instant from, Instant to, Pageable pageable);
 
     @Query("select session from AttendanceSession session join fetch session.user where session.user.id = :userId order by session.startTime desc")
     List<AttendanceSession> findByUserIdOrderByStartTimeDesc(Long userId);

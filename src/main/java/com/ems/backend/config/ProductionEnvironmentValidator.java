@@ -60,6 +60,8 @@ public class ProductionEnvironmentValidator implements EnvironmentPostProcessor 
         String mediaScannerEnabled = required(environment, "MEDIA_SCANNER_ENABLED", errors);
         String mediaScannerHost = required(environment, "MEDIA_SCANNER_HOST", errors);
         String mediaScannerPort = required(environment, "MEDIA_SCANNER_PORT", errors);
+        required(environment, "OUTBOX_WORKER_ENABLED", errors);
+        String outboxEncryptionKey = requiredSecret(environment, "OUTBOX_ENCRYPTION_KEY", 32, errors);
 
         if (databaseUrl != null && !isRemotePostgresJdbcUrl(databaseUrl)) {
             errors.add("DB_URL must be a non-local PostgreSQL JDBC URL");
@@ -137,6 +139,9 @@ public class ProductionEnvironmentValidator implements EnvironmentPostProcessor 
             } catch (NumberFormatException exception) {
                 errors.add("MEDIA_SCANNER_PORT must be an integer");
             }
+        }
+        if (outboxEncryptionKey != null && isObviouslyUnsafe(outboxEncryptionKey)) {
+            errors.add("OUTBOX_ENCRYPTION_KEY contains a known placeholder or unsafe value");
         }
 
         if (!errors.isEmpty()) {

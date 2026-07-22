@@ -52,7 +52,8 @@ public class OtpChallengeService {
         Instant now = Instant.now();
         if (user.getPasswordOtpIssuedAt() != null
                 && user.getPasswordOtpIssuedAt().isAfter(now.minusSeconds(properties.resendCooldownSeconds()))) {
-            return new IssuedOtp(user.getId(), user.getEmail(), user.getFullName(), null, purpose, false);
+            return new IssuedOtp(user.getId(), user.getEmail(), user.getFullName(), null, purpose, false,
+                    user.getPasswordOtpIssuedAt(), user.getPasswordOtpExpiresAt());
         }
 
         String otp = "%06d".formatted(SECURE_RANDOM.nextInt(1_000_000));
@@ -68,7 +69,8 @@ public class OtpChallengeService {
                 null, user.getId(), "OTP_ISSUED", "SUCCESS", purpose.name(),
                 user.getEmail(), metadata
         );
-        return new IssuedOtp(user.getId(), user.getEmail(), user.getFullName(), otp, purpose, true);
+        return new IssuedOtp(user.getId(), user.getEmail(), user.getFullName(), otp, purpose, true,
+                user.getPasswordOtpIssuedAt(), user.getPasswordOtpExpiresAt());
     }
 
     @Transactional
@@ -151,7 +153,9 @@ public class OtpChallengeService {
             String fullName,
             String rawOtp,
             OtpPurpose purpose,
-            boolean created
+            boolean created,
+            Instant issuedAt,
+            Instant expiresAt
     ) {
     }
 

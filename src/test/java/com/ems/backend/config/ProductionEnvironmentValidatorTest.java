@@ -118,6 +118,8 @@ class ProductionEnvironmentValidatorTest {
                 .withProperty("CLOUDINARY_API_SECRET", "strong-cloudinary-api-secret")
                 .withProperty("MEDIA_SCANNER_ENABLED", "true")
                 .withProperty("MEDIA_SCANNER_HOST", "clamav.internal")
-                .withProperty("MEDIA_SCANNER_PORT", "3310");
+                .withProperty("MEDIA_SCANNER_PORT", "3310")
+                .withProperty("OUTBOX_WORKER_ENABLED", "false")
+                .withProperty("OUTBOX_ENCRYPTION_KEY", "0utbox-K3y!2026-Strong-Unique-Random-Material");
     }
 }

@@ -25,6 +25,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.MediaType;
 import org.testcontainers.DockerClientFactory;
@@ -48,6 +49,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -135,13 +137,13 @@ class AuthorizationIntegrationTest {
         mockMvc.perform(get("/api/v1/users")
                         .header("Authorization", bearer(manager)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(2))
-                .andExpect(jsonPath("$[0].id").value(manager.getId()))
-                .andExpect(jsonPath("$[1].id").value(employee.getId()))
-                .andExpect(jsonPath("$[1].phone").doesNotExist())
-                .andExpect(jsonPath("$[1].emergencyContact").doesNotExist())
-                .andExpect(jsonPath("$[1].accountStatus").doesNotExist())
-                .andExpect(jsonPath("$[1].lastLoginAt").doesNotExist());
+                .andExpect(jsonPath("$.numberOfElements").value(2))
+                .andExpect(jsonPath("$.content[0].id").value(manager.getId()))
+                .andExpect(jsonPath("$.content[1].id").value(employee.getId()))
+                .andExpect(jsonPath("$.content[1].phone").doesNotExist())
+                .andExpect(jsonPath("$.content[1].emergencyContact").doesNotExist())
+                .andExpect(jsonPath("$.content[1].accountStatus").doesNotExist())
+                .andExpect(jsonPath("$.content[1].lastLoginAt").doesNotExist());
 
         mockMvc.perform(get("/api/v1/users/summary")
                         .header("Authorization", bearer(manager)))
@@ -205,10 +207,10 @@ class AuthorizationIntegrationTest {
         mockMvc.perform(get("/api/v1/leave-requests")
                         .header("Authorization", bearer(manager)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(2))
-                .andExpect(jsonPath("$[?(@.id == " + employeeLeaveId + ")]").exists())
-                .andExpect(jsonPath("$[?(@.id == " + managerLeaveId + ")]").exists())
-                .andExpect(jsonPath("$[?(@.id == " + otherLeaveId + ")]").doesNotExist());
+                .andExpect(jsonPath("$.numberOfElements").value(2))
+                .andExpect(jsonPath("$.content[?(@.id == " + employeeLeaveId + ")]").exists())
+                .andExpect(jsonPath("$.content[?(@.id == " + managerLeaveId + ")]").exists())
+                .andExpect(jsonPath("$.content[?(@.id == " + otherLeaveId + ")]").doesNotExist());
 
         reviewLeave(manager, employeeLeaveId, "approve", 200);
         reviewLeave(manager, otherLeaveId, "approve", 403);
@@ -225,8 +227,8 @@ class AuthorizationIntegrationTest {
         mockMvc.perform(get("/api/v1/logs")
                         .header("Authorization", bearer(manager)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].id").value(employeeLogId));
+                .andExpect(jsonPath("$.numberOfElements").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(employeeLogId));
 
         mockMvc.perform(put("/api/v1/logs/{id}", otherLogId)
                         .header("Authorization", bearer(manager))
@@ -236,15 +238,15 @@ class AuthorizationIntegrationTest {
                                 """))
                 .andExpect(status().isForbidden());
 
-        mockMvc.perform(get("/api/v1/exports/logs")
+        MvcResult export = mockMvc.perform(get("/api/v1/exports/logs").param("from", "2026-07-01").param("to", "2026-07-31")
                         .header("Authorization", bearer(manager)))
                 .andExpect(status().isOk())
-                .andExpect(content().string(org.hamcrest.Matchers.containsString(
-                        "Visible scoped work"
-                )))
-                .andExpect(content().string(org.hamcrest.Matchers.not(
-                        org.hamcrest.Matchers.containsString("Hidden unscoped work")
-                )));
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        export.getAsyncResult(5_000);
+        String exportedCsv = export.getResponse().getContentAsString();
+        assertTrue(exportedCsv.contains("Visible scoped work"));
+        assertTrue(!exportedCsv.contains("Hidden unscoped work"));
     }
 
     @Test

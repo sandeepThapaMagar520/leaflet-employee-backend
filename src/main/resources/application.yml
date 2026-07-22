@@ -44,6 +44,22 @@ app:
     google-webhook-secret: ${GOOGLE_MAIL_WEBHOOK_SECRET:}
     from-name: ${MAIL_FROM_NAME:Leaflet EMS}
     frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
+  outbox:
+    worker-enabled: ${OUTBOX_WORKER_ENABLED:false}
+    poll-interval: ${OUTBOX_POLL_INTERVAL:10s}
+    batch-size: ${OUTBOX_BATCH_SIZE:20}
+    concurrency: ${OUTBOX_WORKER_CONCURRENCY:2}
+    processing-timeout: ${OUTBOX_PROCESSING_TIMEOUT:5m}
+    max-attempts: ${OUTBOX_MAX_ATTEMPTS:6}
+    initial-retry: ${OUTBOX_INITIAL_RETRY:1m}
+    sent-retention: ${OUTBOX_SENT_RETENTION:30d}
+    terminal-retention: ${OUTBOX_TERMINAL_RETENTION:90d}
+    sensitive-retention: ${OUTBOX_SENSITIVE_RETENTION:24h}
+    provider-connect-timeout: ${OUTBOX_PROVIDER_CONNECT_TIMEOUT:10s}
+    provider-read-timeout: ${OUTBOX_PROVIDER_READ_TIMEOUT:20s}
+    encryption-key: ${OUTBOX_ENCRYPTION_KEY:local-development-outbox-encryption-key-change-me}
+    cleanup-cron: "${OUTBOX_CLEANUP_CRON:0 37 3 * * *}"
+    metrics-interval: ${OUTBOX_METRICS_INTERVAL:60s}
   attendance:
     zone-id: ${ATTENDANCE_ZONE_ID:Asia/Kathmandu}
     required-minutes: ${ATTENDANCE_REQUIRED_MINUTES:420}

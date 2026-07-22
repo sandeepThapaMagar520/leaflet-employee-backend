@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ems.backend.config.MailProperties;
 import com.ems.backend.notification.NotificationType;
+import com.ems.backend.outbox.OutboxProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,6 +16,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class EmailService {
@@ -23,26 +25,33 @@ public class EmailService {
     private final MailProperties mailProperties;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final Duration readTimeout;
 
     @Autowired
-    public EmailService(MailProperties mailProperties, ObjectMapper objectMapper) {
+    public EmailService(MailProperties mailProperties, ObjectMapper objectMapper, OutboxProperties outboxProperties) {
         this(
                 mailProperties,
                 objectMapper,
                 HttpClient.newBuilder()
-                        .connectTimeout(Duration.ofSeconds(10))
+                        .connectTimeout(outboxProperties.providerConnectTimeout())
                         .followRedirects(HttpClient.Redirect.ALWAYS)
-                        .build()
+                        .build(),
+                outboxProperties.providerReadTimeout()
         );
     }
 
     EmailService(MailProperties mailProperties, ObjectMapper objectMapper, HttpClient httpClient) {
+        this(mailProperties, objectMapper, httpClient, Duration.ofSeconds(20));
+    }
+
+    EmailService(MailProperties mailProperties, ObjectMapper objectMapper, HttpClient httpClient, Duration readTimeout) {
         this.mailProperties = mailProperties;
         this.objectMapper = objectMapper;
         this.httpClient = httpClient;
+        this.readTimeout = readTimeout;
     }
 
-    public boolean sendVerificationEmail(String toEmail, String fullName, String token) {
+    boolean sendVerificationEmail(String toEmail, String fullName, String token) {
         String link = mailProperties.frontendBaseUrl() + "/verify-email?token=" + token;
         String subject = "Verify your Leaflet EMS email";
         String body = """
@@ -70,12 +79,12 @@ public class EmailService {
 
         boolean sent = send(toEmail, subject, body, htmlBody);
         if (!sent) {
-            log.warn("Email verification delivery failed for {}", toEmail);
+            log.warn("Legacy direct email verification delivery failed");
         }
         return sent;
     }
 
-    public boolean sendPasswordOtp(String toEmail, String fullName, String otp, boolean accountSetup) {
+    boolean sendPasswordOtp(String toEmail, String fullName, String otp, boolean accountSetup) {
         String link = mailProperties.frontendBaseUrl()
                 + "/reset-password?email="
                 + java.net.URLEncoder.encode(toEmail, java.nio.charset.StandardCharsets.UTF_8)
@@ -116,12 +125,12 @@ public class EmailService {
 
         boolean sent = send(toEmail, subject, body, htmlBody);
         if (!sent) {
-            log.warn("Password OTP delivery failed for {}", toEmail);
+            log.warn("Legacy direct password OTP delivery failed");
         }
         return sent;
     }
 
-    public boolean sendTemporaryPassword(String toEmail, String fullName, String temporaryPassword) {
+    boolean sendTemporaryPassword(String toEmail, String fullName, String temporaryPassword) {
         String link = mailProperties.frontendBaseUrl()
                 + "/reset-password?email="
                 + java.net.URLEncoder.encode(toEmail, java.nio.charset.StandardCharsets.UTF_8)
@@ -161,12 +170,12 @@ public class EmailService {
 
         boolean sent = send(toEmail, subject, body, htmlBody);
         if (!sent) {
-            log.warn("Temporary password delivery failed for {}", toEmail);
+            log.warn("Legacy direct account setup delivery failed");
         }
         return sent;
     }
 
-    public boolean sendEmailChangeOtp(String toEmail, String fullName, String otp) {
+    boolean sendEmailChangeOtp(String toEmail, String fullName, String otp) {
         String subject = "Confirm your new Leaflet EMS email";
         String body = """
                 Hello %s,
@@ -192,12 +201,12 @@ public class EmailService {
 
         boolean sent = send(toEmail, subject, body, htmlBody);
         if (!sent) {
-            log.warn("Email change OTP delivery failed for {}", toEmail);
+            log.warn("Legacy direct email change delivery failed");
         }
         return sent;
     }
 
-    public void sendNotificationEmail(String toEmail, NotificationType type, String title, String message, String link) {
+    void sendNotificationEmail(String toEmail, NotificationType type, String title, String message, String link) {
         String subject = "[Leaflet EMS] " + title;
         String body = """
                 %s
@@ -219,56 +228,137 @@ public class EmailService {
         send(toEmail, subject, body, htmlBody);
     }
 
+    /** Provider boundary used only by the durable outbox worker. */
+    public EmailDeliveryResult deliver(
+            String toEmail,
+            String templateKey,
+            Map<String, Object> values,
+            UUID outboxMessageId
+    ) {
+        String fullName = text(values, "fullName", "there");
+        String subject;
+        String body;
+        switch (templateKey) {
+            case "ACCOUNT_SETUP" -> {
+                subject = "Start your Leaflet EMS account setup";
+                body = "Hello %s,\n\nYour temporary password is:\n\n%s\n\nStart setup: %s/reset-password?email=%s&mode=setup\n\nThis credential is time limited."
+                        .formatted(fullName, text(values, "temporaryPassword", ""), mailProperties.frontendBaseUrl(),
+                                java.net.URLEncoder.encode(toEmail, java.nio.charset.StandardCharsets.UTF_8));
+            }
+            case "ACCOUNT_SETUP_OTP", "PASSWORD_RECOVERY_OTP" -> {
+                boolean setup = templateKey.equals("ACCOUNT_SETUP_OTP");
+                subject = setup ? "Set up your Leaflet EMS password" : "Reset your Leaflet EMS password";
+                body = "Hello %s,\n\nYour one-time code is: %s\n\nThis code expires shortly and can only be used once."
+                        .formatted(fullName, text(values, "otp", ""));
+            }
+            case "EMAIL_CHANGE_OTP" -> {
+                subject = "Confirm your new Leaflet EMS email";
+                body = "Hello %s,\n\nYour one-time email verification code is: %s\n\nThis code expires shortly."
+                        .formatted(fullName, text(values, "otp", ""));
+            }
+            case "EMAIL_VERIFICATION" -> {
+                subject = "Verify your Leaflet EMS email";
+                body = "Hello %s,\n\nVerify your email: %s/verify-email?token=%s\n\nThis link expires shortly."
+                        .formatted(fullName, mailProperties.frontendBaseUrl(), text(values, "token", ""));
+            }
+            case "IN_APP_NOTIFICATION" -> {
+                subject = "[Leaflet EMS] " + text(values, "title", "Notification");
+                body = "%s\n\n%s\n\nOpen in app: %s%s".formatted(
+                        text(values, "title", "Notification"), text(values, "message", ""),
+                        mailProperties.frontendBaseUrl(), text(values, "link", ""));
+            }
+            default -> { return EmailDeliveryResult.permanent("INVALID_TEMPLATE", "Unknown email template"); }
+        }
+        String html = emailLayout(subject, "Hello " + escapeHtml(fullName) + ",",
+                "<p>" + escapeHtml(body).replace("\n", "<br>") + "</p>",
+                "This is an automated Leaflet EMS message.");
+        return sendStructured(toEmail, subject, body, html, outboxMessageId);
+    }
+
     private boolean send(String toEmail, String subject, String body, String htmlBody) {
+        return sendStructured(toEmail, subject, body, htmlBody, null).outcome()
+                == EmailDeliveryResult.Outcome.ACCEPTED;
+    }
+
+    private EmailDeliveryResult sendStructured(
+            String toEmail, String subject, String body, String htmlBody, UUID idempotencyKey
+    ) {
         if (!mailProperties.enabled()) {
-            log.debug("Mail disabled - skipped sending '{}' to {}", subject, toEmail);
-            return false;
+            return EmailDeliveryResult.permanent("MAIL_DISABLED", "Email delivery is disabled");
         }
 
         if (!mailProperties.usesGoogleAppsScript()) {
             log.error("Unsupported mail provider '{}'", mailProperties.provider());
-            return false;
+            return EmailDeliveryResult.permanent("UNSUPPORTED_PROVIDER", "Unsupported mail provider");
         }
 
         if (isBlank(mailProperties.googleWebhookUrl()) || isBlank(mailProperties.googleWebhookSecret())) {
             log.error("Google Apps Script mail is enabled but its webhook URL or secret is missing");
-            return false;
+            return EmailDeliveryResult.retryable("PROVIDER_CONFIGURATION", "Mail provider configuration is unavailable");
         }
 
         try {
-            String payload = buildWebhookPayload(toEmail, subject, body, htmlBody);
-            HttpRequest request = HttpRequest.newBuilder(URI.create(mailProperties.googleWebhookUrl()))
-                    .timeout(Duration.ofSeconds(20))
+            String payload = buildWebhookPayload(toEmail, subject, body, htmlBody, idempotencyKey);
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(URI.create(mailProperties.googleWebhookUrl()))
+                    .timeout(readTimeout)
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(payload))
-                    .build();
+                    .POST(HttpRequest.BodyPublishers.ofString(payload));
+            if (idempotencyKey != null) requestBuilder.header("Idempotency-Key", idempotencyKey.toString());
+            HttpRequest request = requestBuilder.build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            JsonNode responseBody = objectMapper.readTree(response.body());
-
-            if (response.statusCode() < 200
-                    || response.statusCode() >= 300
-                    || !responseBody.path("success").asBoolean(false)) {
-                log.error("Mail webhook rejected '{}' to {} with HTTP {}", subject, toEmail, response.statusCode());
-                return false;
+            JsonNode responseBody;
+            try {
+                responseBody = objectMapper.readTree(response.body());
+            } catch (Exception malformed) {
+                return response.statusCode() >= 500
+                        ? EmailDeliveryResult.retryable("MALFORMED_PROVIDER_RESPONSE", "Provider returned an invalid response")
+                        : EmailDeliveryResult.permanent("MALFORMED_PROVIDER_RESPONSE", "Provider returned an invalid response");
             }
 
-            log.info("Sent email '{}' to {}", subject, toEmail);
-            return true;
+            if (response.statusCode() == 429 || response.statusCode() >= 500) {
+                return EmailDeliveryResult.retryable("PROVIDER_HTTP_" + response.statusCode(), "Provider temporarily rejected delivery");
+            }
+            if (responseBody.path("retryable").asBoolean(false)) {
+                return EmailDeliveryResult.retryable("PROVIDER_TEMPORARY_REJECTION", "Provider temporarily rejected delivery");
+            }
+            if (response.statusCode() < 200 || response.statusCode() >= 300
+                    || !responseBody.path("success").asBoolean(false)) {
+                return EmailDeliveryResult.permanent("PROVIDER_REJECTED", "Provider rejected delivery");
+            }
+
+            return EmailDeliveryResult.accepted(responseBody.path("messageId").isTextual()
+                    ? responseBody.path("messageId").asText() : null);
+        } catch (java.net.http.HttpTimeoutException exception) {
+            return EmailDeliveryResult.retryable("PROVIDER_TIMEOUT", "Provider request timed out");
+        } catch (java.io.IOException exception) {
+            return EmailDeliveryResult.retryable("PROVIDER_NETWORK", "Provider network request failed");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return EmailDeliveryResult.retryable("DELIVERY_INTERRUPTED", "Delivery was interrupted");
         } catch (Exception ex) {
-            log.error("Failed to send email '{}' to {}: {}", subject, toEmail, ex.getMessage());
-            return false;
+            return EmailDeliveryResult.permanent("DELIVERY_CONFIGURATION", "Delivery request could not be constructed");
         }
     }
 
+    private String text(Map<String, Object> values, String key, String fallback) {
+        Object value = values.get(key);
+        return value == null ? fallback : String.valueOf(value);
+    }
+
     String buildWebhookPayload(String toEmail, String subject, String body, String htmlBody) throws Exception {
-        return objectMapper.writeValueAsString(Map.of(
-                "secret", mailProperties.googleWebhookSecret(),
-                "to", toEmail,
-                "subject", subject,
-                "body", body,
-                "htmlBody", htmlBody,
-                "fromName", mailProperties.resolvedFromName()
-        ));
+        return buildWebhookPayload(toEmail, subject, body, htmlBody, null);
+    }
+
+    String buildWebhookPayload(String toEmail, String subject, String body, String htmlBody, UUID idempotencyKey) throws Exception {
+        Map<String, Object> payload = new java.util.HashMap<>();
+        payload.put("secret", mailProperties.googleWebhookSecret());
+        payload.put("to", toEmail);
+        payload.put("subject", subject);
+        payload.put("body", body);
+        payload.put("htmlBody", htmlBody);
+        payload.put("fromName", mailProperties.resolvedFromName());
+        if (idempotencyKey != null) payload.put("idempotencyKey", idempotencyKey.toString());
+        return objectMapper.writeValueAsString(payload);
     }
 
     private String emailLayout(String title, String greeting, String content, String footer) {

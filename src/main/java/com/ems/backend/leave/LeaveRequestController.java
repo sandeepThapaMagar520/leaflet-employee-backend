@@ -5,6 +5,7 @@ import com.ems.backend.leave.dto.LeaveBalanceResponse;
 import com.ems.backend.leave.dto.LeaveRequestResponse;
 import com.ems.backend.leave.dto.UpdateLeaveBalanceRequest;
 import com.ems.backend.leave.dto.UpdateLeaveStatusRequest;
+import com.ems.backend.common.PageResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -33,8 +34,11 @@ public class LeaveRequestController {
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List leave requests", description = "Admins and managers see team requests. Employees see their own requests.")
-    public List<LeaveRequestResponse> listRequests() {
-        return service.listRequests();
+    public PageResponse<LeaveRequestResponse> listRequests(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return service.listRequests(page, size);
     }
 
     @GetMapping("/balance")

@@ -38,7 +38,7 @@ public class EmailVerificationTokenService {
         user.setEmailVerificationExpiresAt(Instant.now().plus(24, ChronoUnit.HOURS));
         user.setEmailVerified(false);
         userRepository.save(user);
-        return new IssuedVerification(user.getId(), user.getEmail(), user.getFullName(), rawToken);
+        return new IssuedVerification(user.getId(), user.getEmail(), user.getFullName(), rawToken, user.getEmailVerificationExpiresAt());
     }
 
     @Transactional
@@ -70,7 +70,7 @@ public class EmailVerificationTokenService {
         user.setEmailVerificationExpiresAt(null);
     }
 
-    public record IssuedVerification(Long userId, String email, String fullName, String rawToken) {
+    public record IssuedVerification(Long userId, String email, String fullName, String rawToken, Instant expiresAt) {
     }
 
     public enum VerificationResult {

@@ -48,7 +48,8 @@ public class EmailChangeOtpService {
                 user.getId(), user.getId(), "EMAIL_CHANGE_OTP_ISSUED", "SUCCESS", null,
                 user.getEmail(), metadata
         );
-        return new IssuedEmailChange(user.getId(), newEmail, user.getFullName(), otp);
+        return new IssuedEmailChange(user.getId(), newEmail, user.getFullName(), otp,
+                user.getEmailChangeOtpIssuedAt(), user.getEmailChangeOtpExpiresAt());
     }
 
     @Transactional
@@ -114,7 +115,8 @@ public class EmailChangeOtpService {
         user.setEmailChangeOtpIssuedAt(null);
     }
 
-    public record IssuedEmailChange(Long userId, String email, String fullName, String rawOtp) {
+    public record IssuedEmailChange(Long userId, String email, String fullName, String rawOtp,
+                                    Instant issuedAt, Instant expiresAt) {
     }
 
     public record VerificationResult(Status status, User user) {

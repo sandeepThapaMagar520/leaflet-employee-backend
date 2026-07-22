@@ -1,5 +1,8 @@
 package com.ems.backend.dailylog;
 
+import com.ems.backend.common.PageResponse;
+import com.ems.backend.common.Pagination;
+
 import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.authorization.AuthorizationPolicyService;
 import com.ems.backend.security.RequestMetadata;
@@ -15,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.time.LocalDate;
 
 import static org.springframework.http.HttpStatus.CONFLICT;
 import static org.springframework.http.HttpStatus.FORBIDDEN;
@@ -61,22 +65,23 @@ public class DailyLogService {
         return map(repository.save(log));
     }
 
-    public List<DailyLogResponse> getMyLogs() {
-        String email = securityUtils.getCurrentUserEmail();
-        return repository.findByUserEmailIgnoreCaseOrderByLogDateDesc(email).stream().map(this::map).toList();
+    @Transactional(readOnly = true)
+    public PageResponse<DailyLogResponse> getMyLogs(int page, int size) {
+        Long userId = getCurrentUser().getId();
+        var pageable = Pagination.page(page, size, "logDate", "desc", java.util.Set.of("logDate"));
+        return PageResponse.from(repository.findByUserId(userId, pageable), this::map);
     }
 
-    public List<DailyLogResponse> getAllLogs() {
+    @Transactional(readOnly = true)
+    public PageResponse<DailyLogResponse> getAllLogs(int page, int size) {
         User currentUser = getCurrentUser();
-        List<DailyLog> logs = switch (currentUser.getRole()) {
-            case ADMIN -> repository.findAllByOrderByLogDateDesc();
-            case MANAGER -> repository.findVisibleToManager(currentUser.getId());
-            case EMPLOYEE -> repository.findByUserIdOrderByLogDateDesc(currentUser.getId());
+        var pageable = Pagination.page(page, size, "logDate", "desc", java.util.Set.of("logDate"));
+        var logs = switch (currentUser.getRole()) {
+            case ADMIN -> repository.findAllNonAdmin(pageable);
+            case MANAGER -> repository.findVisibleToManager(currentUser.getId(), pageable);
+            case EMPLOYEE -> repository.findByUserId(currentUser.getId(), pageable);
         };
-        return logs.stream()
-                .filter(log -> log.getUser().getRole() != Role.ADMIN)
-                .map(this::map)
-                .toList();
+        return PageResponse.from(logs, this::map);
     }
 
     public List<DailyLogResponse> getLogsByUser(Long userId) {
@@ -121,8 +126,18 @@ public class DailyLogService {
         return map(saved);
     }
 
-    public List<DailyLogResponse> getLogsForExport() {
-        return getAllLogs();
+    @Transactional(readOnly = true)
+    public PageResponse<DailyLogResponse> getLogsForExport(
+            LocalDate from, LocalDate to, int page, int size
+    ) {
+        User currentUser = getCurrentUser();
+        var pageable = Pagination.page(page, size, "logDate", "desc", java.util.Set.of("logDate"));
+        var logs = switch (currentUser.getRole()) {
+            case ADMIN -> repository.findAllNonAdminBetween(from, to, pageable);
+            case MANAGER -> repository.findVisibleToManagerBetween(currentUser.getId(), from, to, pageable);
+            case EMPLOYEE -> repository.findByUserIdBetween(currentUser.getId(), from, to, pageable);
+        };
+        return PageResponse.from(logs, this::map);
     }
 
     private User getCurrentUser() {

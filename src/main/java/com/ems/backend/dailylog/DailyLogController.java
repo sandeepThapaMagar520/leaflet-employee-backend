@@ -3,6 +3,7 @@ package com.ems.backend.dailylog;
 import com.ems.backend.dailylog.dto.CreateDailyLogRequest;
 import com.ems.backend.dailylog.dto.DailyLogResponse;
 import com.ems.backend.dailylog.dto.UpdateDailyLogRequest;
+import com.ems.backend.common.PageResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -41,14 +42,20 @@ public class DailyLogController {
     @GetMapping("/me")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "List my daily logs")
-    public List<DailyLogResponse> getMyLogs() {
-        return service.getMyLogs();
+    public PageResponse<DailyLogResponse> getMyLogs(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return service.getMyLogs(page, size);
     }
 
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Operation(summary = "Audit all daily logs", description = "Admin and manager view for reviewing team daily log submissions.")
-    public List<DailyLogResponse> getAllLogs() {
-        return service.getAllLogs();
+    public PageResponse<DailyLogResponse> getAllLogs(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return service.getAllLogs(page, size);
     }
 }

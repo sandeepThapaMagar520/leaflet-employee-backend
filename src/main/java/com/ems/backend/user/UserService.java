@@ -1,6 +1,7 @@
 package com.ems.backend.user;
 
 import com.ems.backend.common.PageResponse;
+import com.ems.backend.common.Pagination;
 import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.user.dto.CreateStaffDocumentRequest;
 import com.ems.backend.user.dto.StaffDocumentResponse;
@@ -18,9 +19,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import org.springframework.data.jpa.domain.Specification;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.CONFLICT;
@@ -55,9 +57,8 @@ public class UserService {
     }
 
     public List<UserResponse> getAllUsers() {
-        return userRepository.findAll()
+        return userRepository.findAll(org.springframework.data.domain.Sort.by("fullName").ascending())
                 .stream()
-                .sorted(Comparator.comparing(User::getFullName, String.CASE_INSENSITIVE_ORDER))
                 .map(this::map)
                 .toList();
     }
@@ -88,6 +89,8 @@ public class UserService {
     public Object getVisibleUsersPaged(
             int page,
             int size,
+            String sortBy,
+            String sortDir,
             String search,
             Role role,
             Boolean active,
@@ -97,9 +100,11 @@ public class UserService {
             boolean incompleteOnly
     ) {
         User actor = securityUtils.getCurrentUser();
+        var pageable = Pagination.page(page, size, sortBy, sortDir,
+                Set.of("fullName", "email", "employeeId", "department", "joiningDate", "lastLoginAt"));
         if (actor.getRole() == Role.ADMIN) {
             return getUsersPaged(
-                    page, size, search, role, active, accountStatus,
+                    pageable, search, role, active, accountStatus,
                     employmentType, department, incompleteOnly
             );
         }
@@ -109,15 +114,47 @@ public class UserService {
                     "Directory access is not available."
             );
         }
-        var pageable = org.springframework.data.domain.PageRequest.of(
-                Math.max(page, 0),
-                Math.max(1, Math.min(size, 100)),
-                org.springframework.data.domain.Sort.by("fullName").ascending()
-        );
         return PageResponse.from(
-                userRepository.findActiveManagedEmployees(actor.getId(), pageable),
+                userRepository.findVisibleDirectoryToManager(actor.getId(), pageable),
                 this::mapManagerDirectory
         );
+    }
+
+    public PageResponse<UserResponse> getUsersPaged(
+            org.springframework.data.domain.Pageable pageable,
+            String search,
+            Role role,
+            Boolean active,
+            AccountStatus accountStatus,
+            EmploymentType employmentType,
+            String department,
+            boolean incompleteOnly
+    ) {
+        String query = Pagination.filter(search, "search");
+        String departmentFilter = Pagination.filter(department, "department");
+        Specification<User> specification = Specification.where(null);
+        if (query != null) {
+            String like = "%" + query + "%";
+            specification = specification.and((root, ignored, cb) -> cb.or(
+                    cb.like(cb.lower(root.get("fullName")), like),
+                    cb.like(cb.lower(root.get("email")), like),
+                    cb.like(cb.lower(root.get("employeeId")), like),
+                    cb.like(cb.lower(root.get("department")), like)
+            ));
+        }
+        if (role != null) specification = specification.and((root, ignored, cb) -> cb.equal(root.get("role"), role));
+        if (active != null) specification = specification.and((root, ignored, cb) -> cb.equal(root.get("active"), active));
+        if (employmentType != null) specification = specification.and((root, ignored, cb) -> cb.equal(root.get("employmentType"), employmentType));
+        if (departmentFilter != null) specification = specification.and((root, ignored, cb) ->
+                cb.equal(cb.lower(root.get("department")), departmentFilter));
+        if (accountStatus != null) specification = specification.and(accountStatusSpecification(accountStatus));
+        if (incompleteOnly) specification = specification.and((root, ignored, cb) -> cb.or(
+                cb.isNull(root.get("employeeId")), cb.isNull(root.get("joiningDate")),
+                cb.isNull(root.get("jobTitle")), cb.isNull(root.get("phone")),
+                cb.isNull(root.get("emergencyContact")), cb.isNull(root.get("department")),
+                cb.isNull(root.get("location"))
+        ));
+        return PageResponse.from(userRepository.findAll(specification, pageable), this::map);
     }
 
     public PageResponse<UserResponse> getUsersPaged(
@@ -131,23 +168,21 @@ public class UserService {
             String department,
             boolean incompleteOnly
     ) {
-        String query = search != null ? search.trim().toLowerCase() : "";
-        String departmentFilter = department != null ? department.trim() : "";
-        List<UserResponse> filtered = getAllUsers().stream()
-                .filter(user -> query.isEmpty()
-                        || user.fullName().toLowerCase().contains(query)
-                        || user.email().toLowerCase().contains(query)
-                        || user.role().name().toLowerCase().contains(query)
-                        || containsIgnoreCase(user.employeeId(), query)
-                        || containsIgnoreCase(user.department(), query))
-                .filter(user -> role == null || user.role() == role)
-                .filter(user -> active == null || active.equals(user.active()))
-                .filter(user -> accountStatus == null || user.accountStatus() == accountStatus)
-                .filter(user -> employmentType == null || user.employmentType() == employmentType)
-                .filter(user -> departmentFilter.isEmpty() || departmentFilter.equalsIgnoreCase(user.department()))
-                .filter(user -> !incompleteOnly || hasIncompleteRecord(user))
-                .toList();
-        return PageResponse.of(filtered, page, size);
+        return getUsersPaged(
+                Pagination.page(page, size, "fullName", "asc", Set.of("fullName")),
+                search, role, active, accountStatus, employmentType, department, incompleteOnly
+        );
+    }
+
+    private Specification<User> accountStatusSpecification(AccountStatus status) {
+        return (root, ignored, cb) -> switch (status) {
+            case VERIFIED -> cb.and(cb.isTrue(root.get("emailVerified")), cb.isFalse(root.get("mustChangePassword")));
+            case SETUP_PENDING -> cb.or(cb.isNotNull(root.get("passwordOtpHash")), cb.isNotNull(root.get("passwordResetTokenHash")));
+            case INVITE_SENT -> cb.and(
+                    cb.or(cb.isFalse(root.get("emailVerified")), cb.isTrue(root.get("mustChangePassword"))),
+                    cb.isNull(root.get("passwordOtpHash")), cb.isNull(root.get("passwordResetTokenHash"))
+            );
+        };
     }
 
     public StaffDirectorySummaryResponse getStaffDirectorySummary() {

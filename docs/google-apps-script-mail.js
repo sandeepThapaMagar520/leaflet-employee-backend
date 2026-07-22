@@ -13,13 +13,25 @@ function doPost(e) {
     const body = String(payload.body || "");
     const htmlBody = String(payload.htmlBody || "");
     const fromName = String(payload.fromName || "Leaflet EMS").trim();
+    const idempotencyKey = String(payload.idempotencyKey || "").trim();
 
-    if (!to || !subject || !body) {
+    if (!to || !subject || !body || !idempotencyKey) {
       return jsonResponse({
         success: false,
-        error: "Missing to, subject, or body"
+        error: "Missing required delivery field"
       });
     }
+
+    const lock = LockService.getScriptLock();
+    if (!lock.tryLock(10000)) {
+      return jsonResponse({ success: false, retryable: true, error: "Busy" });
+    }
+
+    try {
+      const cache = CacheService.getScriptCache();
+      if (cache.get("delivery:" + idempotencyKey)) {
+        return jsonResponse({ success: true, duplicate: true, messageId: idempotencyKey });
+      }
 
     const message = {
       to: to,
@@ -32,15 +44,22 @@ function doPost(e) {
       message.htmlBody = htmlBody;
     }
 
-    MailApp.sendEmail(message);
+      MailApp.sendEmail(message);
+      // Apps Script does not expose Gmail's provider message ID. Retain the
+      // caller's delivery identity for the longest CacheService window so a
+      // timed-out retry is suppressed during the normal retry horizon.
+      cache.put("delivery:" + idempotencyKey, "accepted", 21600);
 
-    return jsonResponse({
-      success: true,
-      remainingQuota: MailApp.getRemainingDailyQuota()
-    });
+      return jsonResponse({
+        success: true,
+        messageId: idempotencyKey,
+        remainingQuota: MailApp.getRemainingDailyQuota()
+      });
+    } finally {
+      lock.releaseLock();
+    }
   } catch (error) {
-    console.error(error);
-    return jsonResponse({ success: false, error: "Email delivery failed" });
+    return jsonResponse({ success: false, retryable: true, error: "Email delivery failed" });
   }
 }
 

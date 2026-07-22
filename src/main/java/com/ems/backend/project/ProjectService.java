@@ -1,6 +1,7 @@
 package com.ems.backend.project;
 
 import com.ems.backend.common.PageResponse;
+import com.ems.backend.common.Pagination;
 import com.ems.backend.common.ProjectAccessService;
 import com.ems.backend.common.SecurityUtils;
 import com.ems.backend.authorization.AuthorizationPolicyService;
@@ -9,6 +10,7 @@ import com.ems.backend.media.MediaAttachmentService;
 import com.ems.backend.media.UploadPurpose;
 import com.ems.backend.notification.NotificationService;
 import com.ems.backend.notification.NotificationType;
+import com.ems.backend.notification.EventIds;
 import com.ems.backend.security.RequestMetadata;
 import com.ems.backend.security.SecurityAuditService;
 import com.ems.backend.project.dto.*;
@@ -31,6 +33,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.Locale;
 import java.util.Set;
+import java.util.LinkedHashMap;
 import java.util.stream.Collectors;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
@@ -44,6 +47,7 @@ public class ProjectService {
     private final UserRepository userRepository;
     private final TaskRepository taskRepository;
     private final ProjectPaymentRepository projectPaymentRepository;
+    private final ProjectPaymentAttachmentRepository projectPaymentAttachmentRepository;
     private final ProjectNoteRepository projectNoteRepository;
     private final ProjectMilestoneRepository projectMilestoneRepository;
     private final ProjectTaskBoardRepository projectTaskBoardRepository;
@@ -63,6 +67,7 @@ public class ProjectService {
             UserRepository userRepository,
             TaskRepository taskRepository,
             ProjectPaymentRepository projectPaymentRepository,
+            ProjectPaymentAttachmentRepository projectPaymentAttachmentRepository,
             ProjectNoteRepository projectNoteRepository,
             ProjectMilestoneRepository projectMilestoneRepository,
             ProjectTaskBoardRepository projectTaskBoardRepository,
@@ -81,6 +86,7 @@ public class ProjectService {
         this.userRepository = userRepository;
         this.taskRepository = taskRepository;
         this.projectPaymentRepository = projectPaymentRepository;
+        this.projectPaymentAttachmentRepository = projectPaymentAttachmentRepository;
         this.projectNoteRepository = projectNoteRepository;
         this.projectMilestoneRepository = projectMilestoneRepository;
         this.projectTaskBoardRepository = projectTaskBoardRepository;
@@ -157,10 +163,19 @@ public class ProjectService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<ProjectResponse> getAllProjectsPaged(int page, int size) {
+    public PageResponse<ProjectResponse> getAllProjectsPaged(
+            int page, int size, String sortBy, String sortDir
+    ) {
         User currentUser = getCurrentUser();
-        List<ProjectResponse> all = getAllProjectsInternal(currentUser);
-        return PageResponse.of(all, page, size);
+        var pageable = Pagination.page(page, size, sortBy, sortDir,
+                Set.of("createdAt", "updatedAt", "name", "status", "startDate", "dueDate"));
+        var idPage = currentUser.getRole() == Role.ADMIN
+                ? projectRepository.findAllProjectIds(pageable)
+                : projectRepository.findAccessibleProjectIds(currentUser.getId(), pageable);
+        List<ProjectResponse> content = mapProjectIds(idPage.getContent(), currentUser);
+        var responsePage = new org.springframework.data.domain.PageImpl<>(
+                content, pageable, idPage.getTotalElements());
+        return PageResponse.from(responsePage);
     }
 
     private List<ProjectResponse> getAllProjectsInternal(User currentUser) {
@@ -168,7 +183,7 @@ public class ProjectService {
             case ADMIN -> projectRepository.findAllWithDetails();
             case MANAGER, EMPLOYEE -> projectRepository.findAllAccessibleToUser(currentUser.getId());
         };
-        return projects.stream().map(project -> mapForUser(project, currentUser)).toList();
+        return mapProjects(projects, currentUser);
     }
 
     @Transactional(readOnly = true)
@@ -181,10 +196,10 @@ public class ProjectService {
     @Transactional(readOnly = true)
     public List<ProjectResponse> getProjectsForStaff(Long userId) {
         User currentUser = getCurrentUser();
-        return projectRepository.findAllForStaffMember(userId).stream()
+        List<Project> projects = projectRepository.findAllForStaffMember(userId).stream()
                 .filter(project -> currentUser.getRole() == Role.ADMIN || projectAccessService.canAccessProject(currentUser, project))
-                .map(project -> mapForUser(project, currentUser))
                 .toList();
+        return mapProjects(projects, currentUser);
     }
 
     public ProjectResponse updateProject(Long projectId, UpdateProjectRequest request) {
@@ -362,12 +377,18 @@ public class ProjectService {
                 .toList();
     }
 
-    public List<PaymentResponse> listPayments(Long projectId) {
+    @Transactional(readOnly = true)
+    public PageResponse<PaymentResponse> listPayments(Long projectId, int page, int size) {
         User currentUser = getCurrentUser();
         projectAccessService.requireFinanciallyVisibleProject(projectId, currentUser);
-        return projectPaymentRepository.findAllByProjectIdWithCreatorOrderByPaidAtDesc(projectId).stream()
-                .map(this::mapPayment)
-                .toList();
+        var pageable = Pagination.page(page, size, "paidAt", "desc", Set.of("paidAt"));
+        var payments = projectPaymentRepository.findPageByProjectId(projectId, pageable);
+        Map<Long, List<ProjectPaymentAttachment>> attachments = payments.isEmpty() ? Map.of()
+                : projectPaymentAttachmentRepository.findByPaymentIdInOrderByPaymentIdAscCreatedAtAsc(
+                        payments.getContent().stream().map(ProjectPayment::getId).toList()).stream()
+                .collect(Collectors.groupingBy(link -> link.getPayment().getId()));
+        return PageResponse.from(payments.map(payment -> mapPayment(
+                payment, attachments.getOrDefault(payment.getId(), List.of()))));
     }
 
     public PaymentResponse addPayment(Long projectId, CreatePaymentRequest request) {
@@ -417,25 +438,26 @@ public class ProjectService {
         return mapPayment(saved);
     }
 
-    public List<ProjectNoteResponse> listNotes(Long projectId, ProjectNoteType type) {
+    @Transactional(readOnly = true)
+    public PageResponse<ProjectNoteResponse> listNotes(Long projectId, ProjectNoteType type, int page, int size) {
         User currentUser = getCurrentUser();
         Project project = projectAccessService.requireAccessibleProject(projectId, currentUser);
 
-        List<ProjectNote> notes;
         if (type != null) {
             if (type == ProjectNoteType.ADMIN_ONLY && !projectAccessService.canViewAdminOnlyNotes(currentUser, project)) {
                 throw new ResponseStatusException(FORBIDDEN, "You do not have permission to view admin-only notes");
             }
-            notes = projectNoteRepository.findAllByProjectIdAndNoteTypeWithCreatorOrderByCreatedAtDesc(projectId, type);
-        } else {
-            notes = projectNoteRepository.findAllByProjectIdWithCreatorOrderByCreatedAtDesc(projectId);
         }
-
-        return notes.stream()
-                .filter(note -> projectAccessService.canViewAdminOnlyNotes(currentUser, project)
-                        || note.getNoteType() == ProjectNoteType.TEAM)
-                .map(this::mapNote)
-                .toList();
+        ProjectNoteType effectiveType = projectAccessService.canViewAdminOnlyNotes(currentUser, project)
+                ? type : ProjectNoteType.TEAM;
+        var pageable = Pagination.page(page, size, "createdAt", "desc", Set.of("createdAt"));
+        var notes = projectNoteRepository.findPage(projectId, effectiveType, pageable);
+        Map<Long, List<ProjectNoteMediaAttachment>> attachments = notes.isEmpty() ? Map.of()
+                : noteMediaAttachmentRepository.findByNoteIdInOrderByNoteIdAscDisplayOrderAsc(
+                        notes.getContent().stream().map(ProjectNote::getId).toList()).stream()
+                .collect(Collectors.groupingBy(link -> link.getNote().getId()));
+        return PageResponse.from(notes.map(note -> mapNote(
+                note, attachments.getOrDefault(note.getId(), List.of()))));
     }
 
     public ProjectNoteResponse addNote(Long projectId, com.ems.backend.project.dto.CreateProjectNoteRequest request) {
@@ -553,9 +575,11 @@ public class ProjectService {
     }
 
     private ProjectNoteResponse mapNote(ProjectNote note) {
-        List<ProjectNoteResponse.Attachment> attachments =
-                noteMediaAttachmentRepository.findByNoteIdOrderByDisplayOrder(note.getId())
-                        .stream()
+        return mapNote(note, noteMediaAttachmentRepository.findByNoteIdOrderByDisplayOrder(note.getId()));
+    }
+
+    private ProjectNoteResponse mapNote(ProjectNote note, List<ProjectNoteMediaAttachment> links) {
+        List<ProjectNoteResponse.Attachment> attachments = links.stream()
                         .map(link -> {
                             MediaAsset asset = link.getMediaAsset();
                             return new ProjectNoteResponse.Attachment(
@@ -579,13 +603,17 @@ public class ProjectService {
     }
 
     private PaymentResponse mapPayment(ProjectPayment payment) {
+        return mapPayment(payment, payment.getAttachments());
+    }
+
+    private PaymentResponse mapPayment(ProjectPayment payment, List<ProjectPaymentAttachment> attachments) {
         return new PaymentResponse(
                 payment.getId(),
                 payment.getAmount(),
                 payment.getPaidAt(),
                 payment.getReferenceNote(),
                 payment.getCreatedBy().getFullName(),
-                payment.getAttachments().stream()
+                attachments.stream()
                         .map(attachment -> new PaymentAttachmentResponse(
                                 attachment.getId(),
                                 attachment.getMediaAsset() == null
@@ -682,42 +710,71 @@ public class ProjectService {
     private void notifyNewlyAssignedEmployees(Project project, Set<Long> previousIds, Set<User> employees) {
         for (User employee : employees) {
             if (!previousIds.contains(employee.getId())) {
-                notificationService.notifyUser(
+                notificationService.notifyUserEvent(
+                        EventIds.stable("PROJECT_ASSIGNED", project.getId(), employee.getId(), project.getVersion()),
+                        "PROJECT_ASSIGNED",
                         employee,
                         NotificationType.PROJECT_ASSIGNED,
                         "Added to project team",
                         "You were added to \"" + project.getName() + "\"",
-                        "/projects/" + project.getId()
+                        "/projects/" + project.getId(),
+                        true,
+                        java.util.Map.of("resourceId", project.getId())
                 );
             }
         }
     }
 
     private ProjectResponse mapForUser(Project project, User viewer) {
-        boolean canViewFinancials =
-                projectAccessService.canViewProjectFinancials(viewer, project);
-        return map(project, viewer, canViewFinancials);
+        return mapProjects(List.of(project), viewer).getFirst();
     }
 
-    private ProjectResponse map(Project project, User viewer, boolean includeFinancials) {
-        List<Task> tasks = taskRepository.findByProjectId(project.getId());
-        int progress = 0;
-        if (!tasks.isEmpty()) {
-            long doneCount = tasks.stream().filter(t -> TaskStatus.DONE.name().equals(t.getStatus())).count();
-            progress = (int) Math.round((double) doneCount / tasks.size() * 100);
-        }
+    private List<ProjectResponse> mapProjectIds(List<Long> ids, User viewer) {
+        if (ids.isEmpty()) return List.of();
+        Map<Long, Project> byId = projectRepository.findAllWithDetailsByIdIn(ids).stream()
+                .collect(Collectors.toMap(Project::getId, project -> project));
+        return mapProjects(ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList(), viewer);
+    }
 
-        BigDecimal totalPaid = BigDecimal.ZERO;
-        BigDecimal lastAmount = null;
-        java.time.Instant lastAt = null;
-        String lastNote = null;
-        if (includeFinancials) {
-            totalPaid = projectPaymentRepository.sumAmountByProjectId(project.getId());
-            var lastOpt = projectPaymentRepository.findLatestByProjectId(project.getId());
-            lastAmount = lastOpt.map(ProjectPayment::getAmount).orElse(null);
-            lastAt = lastOpt.map(ProjectPayment::getPaidAt).orElse(null);
-            lastNote = lastOpt.map(ProjectPayment::getReferenceNote).orElse(null);
-        }
+    private List<ProjectResponse> mapProjects(List<Project> projects, User viewer) {
+        if (projects.isEmpty()) return List.of();
+        List<Long> ids = projects.stream().map(Project::getId).toList();
+        Map<Long, TaskRepository.ProjectTaskProgressRow> progressByProject = taskRepository
+                .summarizeByProjectIds(ids).stream()
+                .collect(Collectors.toMap(TaskRepository.ProjectTaskProgressRow::getProjectId, row -> row));
+        Map<Long, Map<Long, ProjectRepository.MemberPermissionRow>> permissions = new java.util.HashMap<>();
+        projectRepository.findMemberPermissions(ids).forEach(row -> permissions
+                .computeIfAbsent(row.getProjectId(), ignored -> new java.util.HashMap<>())
+                .put(row.getUserId(), row));
+
+        List<Long> financialIds = projects.stream()
+                .filter(project -> projectAccessService.canViewProjectFinancials(viewer, project))
+                .map(Project::getId).toList();
+        Map<Long, BigDecimal> totals = financialIds.isEmpty() ? Map.of() : projectPaymentRepository
+                .sumByProjectIds(financialIds).stream()
+                .collect(Collectors.toMap(ProjectPaymentRepository.ProjectPaymentTotalRow::getProjectId,
+                        ProjectPaymentRepository.ProjectPaymentTotalRow::getTotalPaid));
+        Map<Long, ProjectPaymentRepository.LatestProjectPaymentRow> latest = financialIds.isEmpty() ? Map.of()
+                : projectPaymentRepository.findLatestByProjectIds(financialIds).stream()
+                .collect(Collectors.toMap(ProjectPaymentRepository.LatestProjectPaymentRow::getProjectId, row -> row));
+
+        return projects.stream().map(project -> map(project, viewer, progressByProject.get(project.getId()),
+                permissions.getOrDefault(project.getId(), Map.of()), totals, latest)).toList();
+    }
+
+    private ProjectResponse map(
+            Project project,
+            User viewer,
+            TaskRepository.ProjectTaskProgressRow taskProgress,
+            Map<Long, ProjectRepository.MemberPermissionRow> permissions,
+            Map<Long, BigDecimal> totals,
+            Map<Long, ProjectPaymentRepository.LatestProjectPaymentRow> latest
+    ) {
+        boolean includeFinancials = projectAccessService.canViewProjectFinancials(viewer, project);
+        int progress = taskProgress == null || taskProgress.getTotalCount() == 0 ? 0
+                : (int) Math.round((double) taskProgress.getDoneCount() / taskProgress.getTotalCount() * 100);
+        var latestPayment = latest.get(project.getId());
+        BigDecimal totalPaid = totals.getOrDefault(project.getId(), BigDecimal.ZERO);
 
         return new ProjectResponse(
                 project.getId(),
@@ -733,8 +790,8 @@ public class ProjectService {
                         .map(u -> new ProjectResponse.ProjectEmployeeResponse(
                                 u.getId(),
                                 u.getFullName(),
-                                Boolean.TRUE.equals(projectRepository.canMemberManageTasks(project.getId(), u.getId())),
-                                Boolean.TRUE.equals(projectRepository.canMemberAddNotes(project.getId(), u.getId()))
+                                permissions.containsKey(u.getId()) && Boolean.TRUE.equals(permissions.get(u.getId()).getCanManageTasks()),
+                                permissions.containsKey(u.getId()) && Boolean.TRUE.equals(permissions.get(u.getId()).getCanAddNotes())
                         ))
                         .toList(),
                 project.getClientNotes(),
@@ -747,9 +804,9 @@ public class ProjectService {
                 project.getDocumentLegacyStatus(),
                 includeFinancials ? project.getBudgetAmount() : null,
                 includeFinancials ? totalPaid : null,
-                lastAmount,
-                lastAt,
-                lastNote,
+                includeFinancials && latestPayment != null ? latestPayment.getAmount() : null,
+                includeFinancials && latestPayment != null ? latestPayment.getPaidAt() : null,
+                includeFinancials && latestPayment != null ? latestPayment.getReferenceNote() : null,
                 projectAccessService.canManageProject(viewer, project),
                 includeFinancials,
                 projectAccessService.canRecordProjectPayment(viewer, project),

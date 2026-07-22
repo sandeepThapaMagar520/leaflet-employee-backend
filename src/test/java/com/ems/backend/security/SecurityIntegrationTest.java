@@ -142,6 +142,12 @@ class SecurityIntegrationTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
 
+        mockMvc.perform(get("/api/v1/admin/outbox/stats"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/admin/outbox/stats")
+                        .header("Authorization", "Bearer " + jwtService.generateToken(employee)))
+                .andExpect(status().isForbidden());
+
         mockMvc.perform(get("/api/v1/users/me")
                         .header("Authorization", "Bearer malformed"))
                 .andExpect(status().isUnauthorized())

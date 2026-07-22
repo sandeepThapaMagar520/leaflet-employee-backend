@@ -12,7 +12,9 @@ import com.ems.backend.auth.dto.StaffRegistrationResponse;
 import com.ems.backend.auth.dto.StartAccountSetupRequest;
 import com.ems.backend.auth.dto.VerifyEmailChange;
 import com.ems.backend.auth.dto.VerifyPasswordOtpRequest;
-import com.ems.backend.mail.EmailService;
+import com.ems.backend.notification.EventIds;
+import com.ems.backend.outbox.OutboxEnqueueRequest;
+import com.ems.backend.outbox.OutboxService;
 import com.ems.backend.security.JwtService;
 import com.ems.backend.security.RequestMetadata;
 import com.ems.backend.security.SecurityAuditService;
@@ -31,6 +33,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Map;
 
 @Service
 public class AuthService {
@@ -40,7 +44,7 @@ public class AuthService {
     private final LoginRateLimiter loginRateLimiter;
     private final SecurityUtils securityUtils;
     private final UserProfileService userProfileService;
-    private final EmailService emailService;
+    private final OutboxService outboxService;
     private final StaffAuditEventRepository staffAuditEventRepository;
     private final OtpRequestGuard otpRequestGuard;
     private final OtpChallengeService otpChallengeService;
@@ -55,7 +59,7 @@ public class AuthService {
             LoginRateLimiter loginRateLimiter,
             SecurityUtils securityUtils,
             UserProfileService userProfileService,
-            EmailService emailService,
+            OutboxService outboxService,
             StaffAuditEventRepository staffAuditEventRepository,
             OtpRequestGuard otpRequestGuard,
             OtpChallengeService otpChallengeService,
@@ -69,7 +73,7 @@ public class AuthService {
         this.loginRateLimiter = loginRateLimiter;
         this.securityUtils = securityUtils;
         this.userProfileService = userProfileService;
-        this.emailService = emailService;
+        this.outboxService = outboxService;
         this.staffAuditEventRepository = staffAuditEventRepository;
         this.otpRequestGuard = otpRequestGuard;
         this.otpChallengeService = otpChallengeService;
@@ -78,6 +82,7 @@ public class AuthService {
         this.emailChangeOtpService = emailChangeOtpService;
     }
 
+    @Transactional
     public StaffRegistrationResponse register(RegisterRequest request) {
         String email = request.email().trim().toLowerCase();
         if (userRepository.existsByEmailIgnoreCase(email)) {
@@ -103,23 +108,24 @@ public class AuthService {
         User saved = userRepository.save(user);
         userProfileService.getOrCreateSettings(saved);
         auditRegistration(saved);
-        boolean delivered = emailService.sendTemporaryPassword(
-                saved.getEmail(),
-                saved.getFullName(),
-                request.temporaryPassword()
-        );
+        var eventId = EventIds.stable("ACCOUNT_SETUP", saved.getId(), saved.getSecurityVersion());
+        outboxService.enqueue(new OutboxEnqueueRequest(
+                eventId, "ACCOUNT_SETUP", saved.getId(), saved.getEmail(), "ACCOUNT_SETUP",
+                Map.of("fullName", saved.getFullName(), "temporaryPassword", request.temporaryPassword()),
+                true, Instant.now().plus(24, ChronoUnit.HOURS), 100, correlationId(RequestMetadata.current())
+        ));
 
         return new StaffRegistrationResponse(
                 saved.getId(),
                 saved.getFullName(),
                 saved.getEmail(),
                 saved.getRole(),
-                delivered
-                        ? "Staff registered. The temporary password and setup link were sent to " + saved.getEmail() + "."
-                        : "Staff registered, but the temporary-password email could not be delivered. Retry delivery before sharing access."
+                com.ems.backend.outbox.DeliveryStatus.QUEUED,
+                "Staff registered. The temporary password and setup link are queued for delivery to " + saved.getEmail() + "."
         );
     }
 
+    @Transactional
     public void startAccountSetup(StartAccountSetupRequest request, RequestMetadata metadata) {
         String email = request.email().trim().toLowerCase();
         otpRequestGuard.checkIssuance(email, metadata);
@@ -140,17 +146,12 @@ public class AuthService {
                     "Please wait before requesting another verification code."
             );
         }
-        if (!emailService.sendPasswordOtp(
-                issued.email(), issued.fullName(), issued.rawOtp(), true
-        )) {
-            securityAuditService.recordBestEffort(
-                    issued.userId(), "OTP_DELIVERY_FAILED", "MAIL_PROVIDER_FAILURE", email, metadata
-            );
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "The verification code was created, but email delivery failed. Try again after the cooldown."
-            );
-        }
+        outboxService.enqueue(new OutboxEnqueueRequest(
+                EventIds.stable("ACCOUNT_SETUP_OTP", issued.userId(), issued.issuedAt()),
+                "ACCOUNT_SETUP_OTP", issued.userId(), issued.email(), "ACCOUNT_SETUP_OTP",
+                Map.of("fullName", issued.fullName(), "otp", issued.rawOtp()), true,
+                issued.expiresAt(), 100, correlationId(metadata)
+        ));
     }
 
     public AuthResponse login(LoginRequest request, RequestMetadata metadata) {
@@ -222,6 +223,7 @@ public class AuthService {
         );
     }
 
+    @Transactional
     public void requestEmailChange(RequestEmailChange request, RequestMetadata metadata) {
         User currentUser = securityUtils.getCurrentUser();
         String newEmail = request.newEmail().trim().toLowerCase();
@@ -236,14 +238,13 @@ public class AuthService {
 
         EmailChangeOtpService.IssuedEmailChange issued =
                 emailChangeOtpService.issue(currentUser.getId(), newEmail, metadata);
-        if (issued == null || !emailService.sendEmailChangeOtp(
-                issued.email(), issued.fullName(), issued.rawOtp()
-        )) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "The verification code was created, but email delivery failed. Try again after the cooldown."
-            );
-        }
+        if (issued == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email change could not be started.");
+        outboxService.enqueue(new OutboxEnqueueRequest(
+                EventIds.stable("EMAIL_CHANGE_OTP", issued.userId(), issued.issuedAt()),
+                "EMAIL_CHANGE_OTP", issued.userId(), issued.email(), "EMAIL_CHANGE_OTP",
+                Map.of("fullName", issued.fullName(), "otp", issued.rawOtp()), true,
+                issued.expiresAt(), 100, correlationId(metadata)
+        ));
     }
 
     public AuthResponse verifyEmailChange(VerifyEmailChange request, RequestMetadata metadata) {
@@ -260,6 +261,7 @@ public class AuthService {
         return buildAuthResponse(result.user());
     }
 
+    @Transactional
     public void requestPasswordReset(PasswordResetRequest request, RequestMetadata metadata) {
         String email = request.email().trim().toLowerCase();
         otpRequestGuard.checkIssuance(email, metadata);
@@ -272,15 +274,12 @@ public class AuthService {
                 .filter(user -> !Boolean.TRUE.equals(user.getMustChangePassword()))
                 .map(user -> otpChallengeService.issue(user.getId(), OtpPurpose.PASSWORD_RECOVERY, metadata))
                 .filter(issued -> issued != null && issued.created() && issued.rawOtp() != null)
-                .ifPresent(issued -> {
-                    if (!emailService.sendPasswordOtp(
-                            issued.email(), issued.fullName(), issued.rawOtp(), false
-                    )) {
-                        securityAuditService.recordBestEffort(
-                                issued.userId(), "OTP_DELIVERY_FAILED", "MAIL_PROVIDER_FAILURE", email, metadata
-                        );
-                    }
-                });
+                .ifPresent(issued -> outboxService.enqueue(new OutboxEnqueueRequest(
+                        EventIds.stable("PASSWORD_RECOVERY_OTP", issued.userId(), issued.issuedAt()),
+                        "PASSWORD_RECOVERY_OTP", issued.userId(), issued.email(), "PASSWORD_RECOVERY_OTP",
+                        Map.of("fullName", issued.fullName(), "otp", issued.rawOtp()), true,
+                        issued.expiresAt(), 100, correlationId(metadata)
+                )));
     }
 
     public OtpVerificationResponse verifyPasswordOtp(
@@ -352,5 +351,9 @@ public class AuthService {
                 null, "ACCOUNT_SETUP_FAILED", "INVALID_CREDENTIALS", email, metadata
         );
         return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid email or temporary password.");
+    }
+
+    private String correlationId(RequestMetadata metadata) {
+        return metadata == null ? null : metadata.correlationId();
     }
 }

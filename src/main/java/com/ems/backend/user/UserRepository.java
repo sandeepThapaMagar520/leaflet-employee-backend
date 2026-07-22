@@ -1,6 +1,7 @@
 package com.ems.backend.user;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -14,7 +15,7 @@ import java.util.Optional;
 import java.util.List;
 import java.util.UUID;
 
-public interface UserRepository extends JpaRepository<User, Long> {
+public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificationExecutor<User> {
     @Query("select user from User user where lower(trim(user.email)) = lower(trim(:email))")
     Optional<User> findByEmail(@Param("email") String email);
     Optional<User> findByEmailVerificationTokenHash(String tokenHash);
@@ -24,6 +25,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByEmployeeIdIgnoreCase(String employeeId);
     Optional<User> findByProfileMediaAssetId(UUID mediaAssetId);
     List<User> findByRoleAndActiveTrueOrderByFullNameAsc(Role role);
+    Page<User> findByRoleAndActiveTrue(Role role, Pageable pageable);
 
     @Query("""
             select scope.employee from ManagerEmployeeScope scope
@@ -42,10 +44,25 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     @Query("""
             select user from User user
+            where user.id = :managerId or exists (
+                select scope.id from ManagerEmployeeScope scope
+                where scope.manager.id = :managerId
+                  and scope.employee.id = user.id
+                  and scope.active = true
+                  and user.active = true
+            )
+            """)
+    Page<User> findVisibleDirectoryToManager(@Param("managerId") Long managerId, Pageable pageable);
+
+    @Query("""
+            select user from User user
             where user.active = true and user.role <> com.ems.backend.user.Role.ADMIN
             order by lower(user.fullName)
             """)
     List<User> findAllActiveNonAdmin();
+
+    @Query("select user from User user where user.active = true and user.role <> com.ems.backend.user.Role.ADMIN")
+    Page<User> findAllActiveNonAdmin(Pageable pageable);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select user from User user where user.id = :id")
