@@ -7,11 +7,11 @@ spring:
     password: ${DB_PASSWORD:postgres}
     hikari:
       # Supabase closes idle connections after ~5 min — keep maxLifetime well below that
-      maximum-pool-size: 5
-      minimum-idle: 2
+      maximum-pool-size: ${DB_MAX_POOL_SIZE:8}
+      minimum-idle: ${DB_MIN_IDLE:3}
       max-lifetime: 240000          # 4 min — evict connections before Supabase kills them
       keepalive-time: 60000         # send keepalive ping every 60 s to prevent idle timeout
-      connection-timeout: 20000     # fail fast if no connection available in 20 s
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:10000}
       idle-timeout: 120000          # evict idle connections after 2 min
       connection-test-query: SELECT 1
       validation-timeout: 3000
@@ -72,6 +72,10 @@ app:
       max-session-minutes: ${ATTENDANCE_MAX_SESSION_MINUTES:1440}
       correction-deadline-days: ${ATTENDANCE_CORRECTION_DEADLINE_DAYS:30}
   security:
+    authentication-cache:
+      enabled: ${AUTHENTICATION_CACHE_ENABLED:true}
+      ttl-seconds: ${AUTHENTICATION_CACHE_TTL_SECONDS:15}
+      maximum-entries: ${AUTHENTICATION_CACHE_MAXIMUM_ENTRIES:10000}
     api-rate-limit:
       enabled: ${API_RATE_LIMIT_ENABLED:true}
       read-requests-per-minute: ${API_READ_REQUESTS_PER_MINUTE:120}
@@ -131,3 +135,15 @@ springdoc:
     operations-sorter: method
     tags-sorter: alpha
     display-request-duration: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    tags:
+      application: ${spring.application.name}

@@ -258,6 +258,7 @@ public class UserService {
 
         String before = summary(user);
         boolean identityChanged = !user.getEmail().equalsIgnoreCase(request.email());
+        boolean roleChanged = user.getRole() != request.role();
         boolean beingDeactivated = !Boolean.FALSE.equals(user.getActive())
                 && Boolean.FALSE.equals(request.active());
         user.setFullName(request.fullName());
@@ -273,7 +274,7 @@ public class UserService {
         user.setDepartment(normalize(request.department()));
         user.setLocation(normalize(request.location()));
         user.setTimezone(normalize(request.timezone()) == null ? "Asia/Kathmandu" : normalize(request.timezone()));
-        if (identityChanged || beingDeactivated) {
+        if (identityChanged || roleChanged || beingDeactivated) {
             user.setSecurityVersion(user.getSecurityVersion() + 1);
         }
 
@@ -283,6 +284,12 @@ public class UserService {
             securityAuditService.record(
                     actor.getId(), updatedUser.getId(), "ACCOUNT_DISABLED", "SUCCESS", "ADMIN_UPDATE",
                     updatedUser.getEmail(), null
+            );
+        }
+        if (identityChanged || roleChanged) {
+            securityAuditService.record(
+                    actor.getId(), updatedUser.getId(), "ACCOUNT_ACCESS_CHANGED", "SUCCESS",
+                    roleChanged ? "ROLE_CHANGED" : "EMAIL_CHANGED", updatedUser.getEmail(), null
             );
         }
 

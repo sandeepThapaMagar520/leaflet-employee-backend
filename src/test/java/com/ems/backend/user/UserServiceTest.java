@@ -1,6 +1,10 @@
 package com.ems.backend.user;
 
 import com.ems.backend.common.SecurityUtils;
+import com.ems.backend.authorization.AuthorizationPolicyService;
+import com.ems.backend.media.MediaAttachmentService;
+import com.ems.backend.security.SecurityAuditService;
+import com.ems.backend.user.dto.UpdateUserRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -12,6 +16,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.any;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -28,6 +33,12 @@ class UserServiceTest {
     private StaffDocumentRepository staffDocumentRepository;
     @Mock
     private StaffAuditEventRepository staffAuditEventRepository;
+    @Mock
+    private SecurityAuditService securityAuditService;
+    @Mock
+    private AuthorizationPolicyService authorizationPolicyService;
+    @Mock
+    private MediaAttachmentService mediaAttachmentService;
 
     @InjectMocks
     private UserService userService;
@@ -60,6 +71,28 @@ class UserServiceTest {
         assertEquals(1, summary.onboardingPending());
         assertEquals(1, summary.incompleteRecords());
         assertEquals(List.of("Engineering"), summary.departments());
+    }
+
+    @Test
+    void roleChangeRevokesExistingTokensAndAuditsAccessChange() {
+        User target = user(7L, "Target User", Role.EMPLOYEE, true);
+        target.setSecurityVersion(4);
+        User admin = user(1L, "Admin User", Role.ADMIN, true);
+        when(userRepository.findById(target.getId())).thenReturn(java.util.Optional.of(target));
+        when(securityUtils.getCurrentUser()).thenReturn(admin);
+        when(userRepository.save(target)).thenReturn(target);
+
+        userService.updateUser(target.getId(), new UpdateUserRequest(
+                target.getFullName(), target.getEmail(), Role.MANAGER, true,
+                "Manager", null, null, EmploymentType.FULL_TIME,
+                null, null, null, null, "Asia/Kathmandu"
+        ));
+
+        assertEquals(5, target.getSecurityVersion());
+        verify(securityAuditService).record(
+                admin.getId(), target.getId(), "ACCOUNT_ACCESS_CHANGED", "SUCCESS",
+                "ROLE_CHANGED", target.getEmail(), null
+        );
     }
 
     private User user(Long id, String name, Role role, boolean verified) {

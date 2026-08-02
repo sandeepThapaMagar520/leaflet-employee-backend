@@ -18,6 +18,14 @@ import java.util.UUID;
 public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificationExecutor<User> {
     @Query("select user from User user where lower(trim(user.email)) = lower(trim(:email))")
     Optional<User> findByEmail(@Param("email") String email);
+
+    @Query("""
+            select user.id as id, user.email as email, user.role as role,
+                   user.active as active, user.securityVersion as securityVersion
+            from User user
+            where lower(trim(user.email)) = lower(trim(:email))
+            """)
+    Optional<AuthenticationStateRow> findAuthenticationStateByEmail(@Param("email") String email);
     Optional<User> findByEmailVerificationTokenHash(String tokenHash);
     Optional<User> findByPasswordResetTokenHash(String tokenHash);
     boolean existsByEmailIgnoreCase(String email);
@@ -83,4 +91,12 @@ public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificat
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update User user set user.securityVersion = user.securityVersion + 1 where user.id = :id")
     int incrementSecurityVersion(@Param("id") Long id);
+
+    interface AuthenticationStateRow {
+        Long getId();
+        String getEmail();
+        Role getRole();
+        Boolean getActive();
+        Integer getSecurityVersion();
+    }
 }

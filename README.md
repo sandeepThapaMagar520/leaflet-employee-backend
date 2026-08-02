@@ -45,11 +45,17 @@ APP_ENVIRONMENT=production
 DB_URL=jdbc:postgresql://db.<project-ref>.supabase.co:5432/postgres?sslmode=require
 DB_USERNAME=postgres
 DB_PASSWORD=<supabase_db_password>
+DB_MAX_POOL_SIZE=8
+DB_MIN_IDLE=3
+DB_CONNECTION_TIMEOUT_MS=10000
 JWT_SECRET=<minimum_32_character_secret>
 JWT_EXPIRATION_MS=900000
 JWT_ISSUER=leaflet-ems-production
 JWT_AUDIENCE=leaflet-ems-web-production
 JWT_KEY_ID=<stable-signing-key-identifier>
+AUTHENTICATION_CACHE_ENABLED=true
+AUTHENTICATION_CACHE_TTL_SECONDS=15
+AUTHENTICATION_CACHE_MAXIMUM_ENTRIES=10000
 ALLOWED_ORIGIN_PATTERNS=https://<your-frontend-domain>
 CLOUDINARY_CLOUD_NAME=<your_cloud_name>
 CLOUDINARY_API_KEY=<your_cloudinary_api_key>
@@ -88,6 +94,13 @@ Store the same secret in the Apps Script `WEBHOOK_SECRET` script property. The w
 script owner and allow access to anyone. OTP values are never written to application logs.
 
 Render provides the `PORT` environment variable automatically, so it does not need to be set manually.
+
+The public Actuator health endpoint is `/actuator/health`. The metrics and
+Prometheus endpoints under `/actuator/**` require an authenticated administrator.
+The authentication-state cache stores only user ID, email, role, active status,
+and security version; successful security changes evict the affected user after
+transaction commit. Its cache is process-local, so horizontally scaled production
+should use a shared cache or accept convergence within the configured TTL.
 
 ClamAV is not required by the current production policy. JPEG and PNG files retain
 full decode and provider validation. PDFs retain signature, MIME/extension, EOF,

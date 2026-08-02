@@ -11,10 +11,16 @@ public class SecurityAuditService {
 
     private final JdbcTemplate jdbcTemplate;
     private final TokenHashingService tokenHashingService;
+    private final AuthenticationStateCache authenticationStateCache;
 
-    public SecurityAuditService(JdbcTemplate jdbcTemplate, TokenHashingService tokenHashingService) {
+    public SecurityAuditService(
+            JdbcTemplate jdbcTemplate,
+            TokenHashingService tokenHashingService,
+            AuthenticationStateCache authenticationStateCache
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.tokenHashingService = tokenHashingService;
+        this.authenticationStateCache = authenticationStateCache;
     }
 
     public void record(
@@ -59,6 +65,9 @@ public class SecurityAuditService {
                 metadata == null ? null : metadata.userAgent(),
                 metadata == null ? null : metadata.correlationId()
         );
+        if ("SUCCESS".equals(outcome)) {
+            authenticationStateCache.evictUserAfterCommit(targetUserId);
+        }
     }
 
     public void recordBestEffort(

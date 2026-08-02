@@ -1,7 +1,5 @@
 package com.ems.backend.security;
 
-import com.ems.backend.user.User;
-import com.ems.backend.user.UserRepository;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -21,18 +19,18 @@ import java.util.List;
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
-    private final UserRepository userRepository;
+    private final AuthenticationStateCache authenticationStateCache;
     private final ApiErrorWriter errorWriter;
     private final SecurityAuditService auditService;
 
     public JwtAuthenticationFilter(
             JwtService jwtService,
-            UserRepository userRepository,
+            AuthenticationStateCache authenticationStateCache,
             ApiErrorWriter errorWriter,
             SecurityAuditService auditService
     ) {
         this.jwtService = jwtService;
-        this.userRepository = userRepository;
+        this.authenticationStateCache = authenticationStateCache;
         this.errorWriter = errorWriter;
         this.auditService = auditService;
     }
@@ -60,19 +58,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
 
             if (SecurityContextHolder.getContext().getAuthentication() == null) {
-                User user = userRepository.findByEmail(email.toLowerCase()).orElse(null);
+                AuthenticationStateCache.AuthenticationState user =
+                        authenticationStateCache.findByEmail(email).orElse(null);
                 if (user == null
-                        || Boolean.FALSE.equals(user.getActive())
-                        || user.getSecurityVersion() == null
-                        || user.getSecurityVersion() != tokenSecurityVersion) {
-                    reject(request, response, user, email, "TOKEN_REVOKED");
+                        || Boolean.FALSE.equals(user.active())
+                        || user.securityVersion() == null
+                        || user.securityVersion() != tokenSecurityVersion) {
+                    reject(request, response, user == null ? null : user.id(), email, "TOKEN_REVOKED");
                     return;
                 }
                 UsernamePasswordAuthenticationToken authentication =
                         new UsernamePasswordAuthenticationToken(
-                                user.getEmail(),
+                                user.email(),
                                 null,
-                                List.of(new SimpleGrantedAuthority("ROLE_" + user.getRole().name()))
+                                List.of(new SimpleGrantedAuthority("ROLE_" + user.role().name()))
                         );
                 authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(authentication);
@@ -87,13 +86,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private void reject(
             HttpServletRequest request,
             HttpServletResponse response,
-            User user,
+            Long userId,
             String email,
             String reasonCode
     ) throws IOException {
         SecurityContextHolder.clearContext();
         auditService.recordBestEffort(
-                user == null ? null : user.getId(),
+                userId,
                 "TOKEN_REJECTED",
                 reasonCode,
                 email,
