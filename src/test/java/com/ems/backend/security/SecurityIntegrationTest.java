@@ -1,6 +1,7 @@
 package com.ems.backend.security;
 
 import com.ems.backend.auth.OtpChallengeService;
+import com.ems.backend.auth.DatabaseRateLimitService;
 import com.ems.backend.auth.OtpPurpose;
 import com.ems.backend.auth.PasswordResetService;
 import com.ems.backend.user.EmploymentType;
@@ -27,7 +28,9 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.DockerClientFactory;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -35,6 +38,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -103,6 +107,7 @@ class SecurityIntegrationTest {
     @Autowired private TokenHashingService tokenHashingService;
     @Autowired private PasswordResetService passwordResetService;
     @Autowired private OtpChallengeService otpChallengeService;
+    @Autowired private DatabaseRateLimitService databaseRateLimitService;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private PlatformTransactionManager transactionManager;
     @SpyBean private SecurityAuditService securityAuditService;
@@ -155,15 +160,17 @@ class SecurityIntegrationTest {
     }
 
     @Test
-    void databaseBackedOtpCooldownIsEnforcedWithoutAccountDisclosure() throws Exception {
+    void databaseBackedOtpIssuanceLimitIsEnforcedWithoutAccountDisclosure() throws Exception {
         String unknownEmail = "unknown-" + UUID.randomUUID() + "@example.net";
         String requestBody = "{\"email\":\"" + unknownEmail + "\"}";
 
-        mockMvc.perform(post("/api/v1/auth/forgot-password")
-                        .header("X-Forwarded-For", "203.0.113.61")
-                        .contentType("application/json")
-                        .content(requestBody))
-                .andExpect(status().isOk());
+        for (int attempt = 0; attempt < 10; attempt++) {
+            mockMvc.perform(post("/api/v1/auth/forgot-password")
+                            .header("X-Forwarded-For", "203.0.113.61")
+                            .contentType("application/json")
+                            .content(requestBody))
+                    .andExpect(status().isOk());
+        }
 
         mockMvc.perform(post("/api/v1/auth/forgot-password")
                         .header("X-Forwarded-For", "203.0.113.61")
@@ -267,6 +274,32 @@ class SecurityIntegrationTest {
                             .count()
             );
         }
+    }
+
+    @Test
+    void concurrentDatabaseRateLimitNeverExceedsConfiguredMaximum() throws Exception {
+        String account = "rate-limit-" + UUID.randomUUID() + "@example.net";
+        CountDownLatch start = new CountDownLatch(1);
+        try (var executor = Executors.newFixedThreadPool(12)) {
+            var attempts = new ArrayList<java.util.concurrent.Future<Boolean>>();
+            for (int index = 0; index < 12; index++) {
+                attempts.add(executor.submit(() -> {
+                    start.await();
+                    return databaseRateLimitService.consume(
+                            "otp-issue-minute", "account", account, Duration.ofMinutes(1), 10
+                    );
+                }));
+            }
+            start.countDown();
+            int accepted = 0;
+            for (var attempt : attempts) {
+                if (attempt.get()) accepted++;
+            }
+            assertEquals(10, accepted);
+        }
+        assertFalse(databaseRateLimitService.consume(
+                "otp-issue-minute", "account", account, Duration.ofMinutes(1), 10
+        ));
     }
 
     @Test

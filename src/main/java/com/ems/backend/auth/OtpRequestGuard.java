@@ -26,30 +26,44 @@ public class OtpRequestGuard {
 
     public void checkIssuance(String normalizedEmail, RequestMetadata metadata) {
         boolean allowed = rateLimitService.consume(
-                "otp-issue-cooldown", "account", normalizedEmail,
-                Duration.ofSeconds(properties.resendCooldownSeconds()), 1
+                "otp-issue-minute", "account", normalizedEmail,
+                Duration.ofSeconds(properties.resendCooldownSeconds()),
+                properties.accountIssuanceLimitPerMinute()
         );
-        allowed &= rateLimitService.consume(
+        if (!allowed) {
+            rejectIssuance(normalizedEmail, metadata);
+        }
+        allowed = rateLimitService.consume(
                 "otp-issue-hour", "account", normalizedEmail,
                 Duration.ofHours(1), properties.accountIssuanceLimitPerHour()
         );
-        allowed &= rateLimitService.consume(
+        if (!allowed) {
+            rejectIssuance(normalizedEmail, metadata);
+        }
+        allowed = rateLimitService.consume(
                 "otp-issue-day", "account", normalizedEmail,
                 Duration.ofDays(1), properties.accountIssuanceLimitPerDay()
         );
-        allowed &= rateLimitService.consume(
+        if (!allowed) {
+            rejectIssuance(normalizedEmail, metadata);
+        }
+        allowed = rateLimitService.consume(
                 "otp-issue-hour", "ip", metadata.clientIp(),
                 Duration.ofHours(1), properties.ipIssuanceLimitPerHour()
         );
         if (!allowed) {
-            auditService.recordBestEffort(
-                    null, "OTP_ISSUANCE_THROTTLED", "RATE_LIMITED", normalizedEmail, metadata
-            );
-            throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS,
-                    "Too many verification-code requests. Please wait and try again."
-            );
+            rejectIssuance(normalizedEmail, metadata);
         }
+    }
+
+    private void rejectIssuance(String normalizedEmail, RequestMetadata metadata) {
+        auditService.recordBestEffort(
+                null, "OTP_ISSUANCE_THROTTLED", "RATE_LIMITED", normalizedEmail, metadata
+        );
+        throw new ResponseStatusException(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "Too many verification-code requests. Please wait and try again."
+        );
     }
 
     public void checkVerification(String normalizedEmail, RequestMetadata metadata) {

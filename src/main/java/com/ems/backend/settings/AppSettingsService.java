@@ -4,9 +4,16 @@ import com.ems.backend.settings.dto.AppSettingsResponse;
 import com.ems.backend.settings.dto.UpdateAppSettingsRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import java.time.Duration;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class AppSettingsService {
+    private static final long CACHE_TTL_NANOS = Duration.ofSeconds(30).toNanos();
     public static final String LEAVE_ANNUAL_DAYS = "leave.annual.days";
     public static final String LEAVE_SICK_DAYS = "leave.sick.days";
     public static final String LEAVE_RESET_MONTH = "leave.reset.month";
@@ -21,6 +28,7 @@ public class AppSettingsService {
     public static final String SESSION_BROWSER_ONLY = "session.browser.only";
 
     private final AppSettingRepository repository;
+    private final Map<String, CachedValue> cache = new ConcurrentHashMap<>();
 
     public AppSettingsService(AppSettingRepository repository) {
         this.repository = repository;
@@ -100,17 +108,26 @@ public class AppSettingsService {
     }
 
     private int getInt(String key, int fallback) {
-        return repository.findById(key)
-                .map(AppSetting::getValue)
+        return java.util.Optional.ofNullable(getValue(key))
                 .map(value -> parseInt(value, fallback))
                 .orElse(fallback);
     }
 
     private boolean getBoolean(String key, boolean fallback) {
-        return repository.findById(key)
-                .map(AppSetting::getValue)
+        return java.util.Optional.ofNullable(getValue(key))
                 .map(Boolean::parseBoolean)
                 .orElse(fallback);
+    }
+
+    private String getValue(String key) {
+        long now = System.nanoTime();
+        CachedValue cached = cache.get(key);
+        if (cached != null && cached.expiresAtNanos() > now) {
+            return cached.value();
+        }
+        String value = repository.findById(key).map(AppSetting::getValue).orElse(null);
+        cache.put(key, new CachedValue(value, now + CACHE_TTL_NANOS));
+        return value;
     }
 
     private int parseInt(String value, int fallback) {
@@ -136,6 +153,26 @@ public class AppSettingsService {
             return next;
         });
         setting.setValue(value);
-        repository.save(setting);
+        AppSetting saved = repository.save(setting);
+        cache.remove(key);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    cache.put(key, new CachedValue(
+                            saved.getValue(), System.nanoTime() + CACHE_TTL_NANOS
+                    ));
+                }
+
+                @Override
+                public void afterCompletion(int status) {
+                    if (status != TransactionSynchronization.STATUS_COMMITTED) {
+                        cache.remove(key);
+                    }
+                }
+            });
+        }
     }
+
+    private record CachedValue(String value, long expiresAtNanos) {}
 }

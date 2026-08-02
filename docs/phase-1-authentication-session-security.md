@@ -122,7 +122,8 @@ The `users` table stores:
   `email_change_otp_expires_at`, `email_change_otp_failed_attempts`, and
   `email_change_otp_issued_at`
 
-`auth_rate_limit_events` contains shared throttle state.
+`auth_rate_limit_buckets` contains shared, atomic throttle state. V42 retains
+`auth_rate_limit_events` temporarily so an application rollback remains possible.
 `security_audit_events` contains actor/target foreign keys, event, outcome, safe
 reason/details, hashed identifier, client metadata, correlation ID, and time.
 It never stores credentials, raw OTPs/tokens, JWTs, or signing/mail secrets.
@@ -192,6 +193,7 @@ New or changed variables:
 - `RESET_TOKEN_VALIDITY_SECONDS`
 - `OTP_RESEND_COOLDOWN_SECONDS`
 - `OTP_MAX_VERIFICATION_ATTEMPTS`
+- `OTP_ACCOUNT_ISSUANCE_LIMIT_PER_MINUTE`
 - `OTP_ACCOUNT_ISSUANCE_LIMIT_PER_HOUR`
 - `OTP_IP_ISSUANCE_LIMIT_PER_HOUR`
 - `OTP_ACCOUNT_ISSUANCE_LIMIT_PER_DAY`

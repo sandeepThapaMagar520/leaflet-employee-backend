@@ -50,12 +50,6 @@ public class OtpChallengeService {
         }
 
         Instant now = Instant.now();
-        if (user.getPasswordOtpIssuedAt() != null
-                && user.getPasswordOtpIssuedAt().isAfter(now.minusSeconds(properties.resendCooldownSeconds()))) {
-            return new IssuedOtp(user.getId(), user.getEmail(), user.getFullName(), null, purpose, false,
-                    user.getPasswordOtpIssuedAt(), user.getPasswordOtpExpiresAt());
-        }
-
         String otp = "%06d".formatted(SECURE_RANDOM.nextInt(1_000_000));
         user.setPasswordOtpHash(passwordEncoder.encode(otp));
         user.setPasswordOtpExpiresAt(now.plusSeconds(properties.validitySeconds()));

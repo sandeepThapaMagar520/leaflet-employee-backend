@@ -30,6 +30,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
@@ -51,6 +52,7 @@ public class AuthService {
     private final PasswordResetService passwordResetService;
     private final SecurityAuditService securityAuditService;
     private final EmailChangeOtpService emailChangeOtpService;
+    private final TransactionOperations transactionOperations;
 
     public AuthService(
             UserRepository userRepository,
@@ -65,7 +67,8 @@ public class AuthService {
             OtpChallengeService otpChallengeService,
             PasswordResetService passwordResetService,
             SecurityAuditService securityAuditService,
-            EmailChangeOtpService emailChangeOtpService
+            EmailChangeOtpService emailChangeOtpService,
+            TransactionOperations transactionOperations
     ) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
@@ -80,6 +83,7 @@ public class AuthService {
         this.passwordResetService = passwordResetService;
         this.securityAuditService = securityAuditService;
         this.emailChangeOtpService = emailChangeOtpService;
+        this.transactionOperations = transactionOperations;
     }
 
     @Transactional
@@ -125,10 +129,19 @@ public class AuthService {
         );
     }
 
-    @Transactional
     public void startAccountSetup(StartAccountSetupRequest request, RequestMetadata metadata) {
         String email = request.email().trim().toLowerCase();
         otpRequestGuard.checkIssuance(email, metadata);
+        transactionOperations.executeWithoutResult(
+                ignored -> startAccountSetupTransaction(request, metadata, email)
+        );
+    }
+
+    private void startAccountSetupTransaction(
+            StartAccountSetupRequest request,
+            RequestMetadata metadata,
+            String email
+    ) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> invalidSetup(email, metadata));
 
@@ -160,7 +173,6 @@ public class AuthService {
 
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> {
-                    loginRateLimiter.recordFailure(email);
                     securityAuditService.recordBestEffort(
                             null, "LOGIN_FAILED", "INVALID_CREDENTIALS", email, metadata
                     );
@@ -168,7 +180,6 @@ public class AuthService {
                 });
 
         if (Boolean.FALSE.equals(user.getActive())) {
-            loginRateLimiter.recordFailure(email);
             securityAuditService.recordBestEffort(
                     user.getId(), "LOGIN_FAILED", "ACCOUNT_DISABLED", email, metadata
             );
@@ -176,7 +187,6 @@ public class AuthService {
         }
 
         if (!passwordEncoder.matches(request.password(), user.getPassword())) {
-            loginRateLimiter.recordFailure(email);
             securityAuditService.recordBestEffort(
                     user.getId(), "LOGIN_FAILED", "INVALID_CREDENTIALS", email, metadata
             );
@@ -184,6 +194,7 @@ public class AuthService {
         }
 
         if (Boolean.TRUE.equals(user.getMustChangePassword())) {
+            loginRateLimiter.clear(email);
             securityAuditService.recordBestEffort(
                     null, user.getId(), "LOGIN_BLOCKED", "DENIED",
                     "ACCOUNT_SETUP_REQUIRED", email, metadata
@@ -223,11 +234,16 @@ public class AuthService {
         );
     }
 
-    @Transactional
     public void requestEmailChange(RequestEmailChange request, RequestMetadata metadata) {
-        User currentUser = securityUtils.getCurrentUser();
         String newEmail = request.newEmail().trim().toLowerCase();
         otpRequestGuard.checkIssuance(newEmail, metadata);
+        transactionOperations.executeWithoutResult(
+                ignored -> requestEmailChangeTransaction(newEmail, metadata)
+        );
+    }
+
+    private void requestEmailChangeTransaction(String newEmail, RequestMetadata metadata) {
+        User currentUser = securityUtils.getCurrentUser();
         if (newEmail.equals(currentUser.getEmail())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This is already your current email address.");
         }
@@ -261,10 +277,15 @@ public class AuthService {
         return buildAuthResponse(result.user());
     }
 
-    @Transactional
     public void requestPasswordReset(PasswordResetRequest request, RequestMetadata metadata) {
         String email = request.email().trim().toLowerCase();
         otpRequestGuard.checkIssuance(email, metadata);
+        transactionOperations.executeWithoutResult(
+                ignored -> requestPasswordResetTransaction(email, metadata)
+        );
+    }
+
+    private void requestPasswordResetTransaction(String email, RequestMetadata metadata) {
         securityAuditService.recordBestEffort(
                 null, null, "PASSWORD_RESET_REQUESTED", "ACCEPTED",
                 "REQUEST_ACCEPTED", email, metadata

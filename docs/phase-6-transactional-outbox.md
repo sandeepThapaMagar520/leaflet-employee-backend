@@ -128,7 +128,7 @@ required transaction.
 ## Environment variables
 
 * `OUTBOX_WORKER_ENABLED` (default `false`)
-* `OUTBOX_POLL_INTERVAL` (`10s`)
+* `OUTBOX_POLL_INTERVAL` (`2s`)
 * `OUTBOX_BATCH_SIZE` (`20`, bounded 1–100)
 * `OUTBOX_WORKER_CONCURRENCY` (`2`, bounded 1–8)
 * `OUTBOX_PROCESSING_TIMEOUT` (`5m`)

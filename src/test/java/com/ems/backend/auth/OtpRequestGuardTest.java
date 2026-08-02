@@ -13,6 +13,7 @@ import java.time.Duration;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -24,39 +25,39 @@ class OtpRequestGuardTest {
     @Mock private SecurityAuditService auditService;
 
     @Test
-    void issuanceChecksCooldownAccountHourDailyAndIpHour() {
+    void issuanceChecksAccountMinuteHourDailyAndIpHour() {
         allowAllIssuance();
 
         assertDoesNotThrow(() -> guard().checkIssuance("employee@example.net", REQUEST));
     }
 
     @Test
-    void resendCooldownReturns429() {
+    void accountMinuteLimitReturns429WithoutConsumingLongerWindows() {
         when(rateLimitService.consume(
-                "otp-issue-cooldown", "account", "employee@example.net", Duration.ofSeconds(60), 1
+                "otp-issue-minute", "account", "employee@example.net", Duration.ofSeconds(60), 10
         )).thenReturn(false);
-        allowRemainingIssuance();
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
                 () -> guard().checkIssuance("employee@example.net", REQUEST)
         );
         assertEquals(429, exception.getStatusCode().value());
+        verifyNoMoreInteractions(rateLimitService);
     }
 
     @Test
     void ipIssuanceLimitReturns429() {
         when(rateLimitService.consume(
-                "otp-issue-cooldown", "account", "employee@example.net", Duration.ofSeconds(60), 1
+                "otp-issue-minute", "account", "employee@example.net", Duration.ofSeconds(60), 10
         )).thenReturn(true);
         when(rateLimitService.consume(
-                "otp-issue-hour", "account", "employee@example.net", Duration.ofHours(1), 5
+                "otp-issue-hour", "account", "employee@example.net", Duration.ofHours(1), 30
         )).thenReturn(true);
         when(rateLimitService.consume(
-                "otp-issue-day", "account", "employee@example.net", Duration.ofDays(1), 10
+                "otp-issue-day", "account", "employee@example.net", Duration.ofDays(1), 100
         )).thenReturn(true);
         when(rateLimitService.consume(
-                "otp-issue-hour", "ip", REQUEST.clientIp(), Duration.ofHours(1), 20
+                "otp-issue-hour", "ip", REQUEST.clientIp(), Duration.ofHours(1), 100
         )).thenReturn(false);
 
         ResponseStatusException exception = assertThrows(
@@ -69,48 +70,43 @@ class OtpRequestGuardTest {
     @Test
     void accountIssuanceLimitReturns429() {
         when(rateLimitService.consume(
-                "otp-issue-cooldown", "account", "employee@example.net", Duration.ofSeconds(60), 1
+                "otp-issue-minute", "account", "employee@example.net", Duration.ofSeconds(60), 10
         )).thenReturn(true);
         when(rateLimitService.consume(
-                "otp-issue-hour", "account", "employee@example.net", Duration.ofHours(1), 5
+                "otp-issue-hour", "account", "employee@example.net", Duration.ofHours(1), 30
         )).thenReturn(false);
-        when(rateLimitService.consume(
-                "otp-issue-day", "account", "employee@example.net", Duration.ofDays(1), 10
-        )).thenReturn(true);
-        when(rateLimitService.consume(
-                "otp-issue-hour", "ip", REQUEST.clientIp(), Duration.ofHours(1), 20
-        )).thenReturn(true);
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
                 () -> guard().checkIssuance("employee@example.net", REQUEST)
         );
         assertEquals(429, exception.getStatusCode().value());
+        verifyNoMoreInteractions(rateLimitService);
     }
 
     private void allowAllIssuance() {
         when(rateLimitService.consume(
-                "otp-issue-cooldown", "account", "employee@example.net", Duration.ofSeconds(60), 1
+                "otp-issue-minute", "account", "employee@example.net", Duration.ofSeconds(60), 10
         )).thenReturn(true);
         allowRemainingIssuance();
     }
 
     private void allowRemainingIssuance() {
         when(rateLimitService.consume(
-                "otp-issue-hour", "account", "employee@example.net", Duration.ofHours(1), 5
+                "otp-issue-hour", "account", "employee@example.net", Duration.ofHours(1), 30
         )).thenReturn(true);
         when(rateLimitService.consume(
-                "otp-issue-day", "account", "employee@example.net", Duration.ofDays(1), 10
+                "otp-issue-day", "account", "employee@example.net", Duration.ofDays(1), 100
         )).thenReturn(true);
         when(rateLimitService.consume(
-                "otp-issue-hour", "ip", REQUEST.clientIp(), Duration.ofHours(1), 20
+                "otp-issue-hour", "ip", REQUEST.clientIp(), Duration.ofHours(1), 100
         )).thenReturn(true);
     }
 
     private OtpRequestGuard guard() {
         return new OtpRequestGuard(
                 rateLimitService,
-                new OtpSecurityProperties(600, 600, 60, 5, 5, 20, 10, 20, 60),
+                new OtpSecurityProperties(600, 600, 60, 5, 10, 30, 100, 100, 20, 60),
                 auditService
         );
     }

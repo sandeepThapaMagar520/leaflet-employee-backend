@@ -18,15 +18,18 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableMethodSecurity
 public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final ApiRateLimitFilter apiRateLimitFilter;
     private final CustomUserDetailsService userDetailsService;
     private final ApiErrorWriter errorWriter;
 
     public SecurityConfig(
             JwtAuthenticationFilter jwtAuthenticationFilter,
+            ApiRateLimitFilter apiRateLimitFilter,
             CustomUserDetailsService userDetailsService,
             ApiErrorWriter errorWriter
     ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.apiRateLimitFilter = apiRateLimitFilter;
         this.userDetailsService = userDetailsService;
         this.errorWriter = errorWriter;
     }
@@ -74,6 +77,7 @@ public class SecurityConfig {
                         }))
                 .authenticationProvider(authenticationProvider())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(apiRateLimitFilter, JwtAuthenticationFilter.class)
                 .build();
     }
 

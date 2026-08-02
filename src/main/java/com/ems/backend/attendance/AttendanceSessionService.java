@@ -237,6 +237,10 @@ public class AttendanceSessionService {
                         .stream()
                         .map(leave -> leave.getUser().getId())
                         .collect(Collectors.toSet());
+        long requiredMinutes = settingsService.attendanceRequiredMinutes();
+        long graceMinutes = settingsService.attendanceGraceMinutes();
+        int missingCheckoutMinutes = settingsService.attendanceMissingCheckoutMinutes();
+        int heartbeatStaleMinutes = settingsService.attendanceHeartbeatStaleMinutes();
 
         List<AttendanceDaySummaryResponse> content = visibleUsers.stream()
                 .map(user -> buildSummary(
@@ -244,7 +248,11 @@ public class AttendanceSessionService {
                         workDate,
                         sessionsByUser.getOrDefault(user.getId(), List.of()),
                         now,
-                        usersOnLeave.contains(user.getId())
+                        usersOnLeave.contains(user.getId()),
+                        requiredMinutes,
+                        graceMinutes,
+                        missingCheckoutMinutes,
+                        heartbeatStaleMinutes
                 ))
                 .toList();
         return PageResponse.from(new org.springframework.data.domain.PageImpl<>(
@@ -291,6 +299,26 @@ public class AttendanceSessionService {
             Instant now,
             boolean onLeave
     ) {
+        return buildSummary(
+                user, workDate, sessions, now, onLeave,
+                settingsService.attendanceRequiredMinutes(),
+                settingsService.attendanceGraceMinutes(),
+                settingsService.attendanceMissingCheckoutMinutes(),
+                settingsService.attendanceHeartbeatStaleMinutes()
+        );
+    }
+
+    private AttendanceDaySummaryResponse buildSummary(
+            User user,
+            LocalDate workDate,
+            List<AttendanceSession> sessions,
+            Instant now,
+            boolean onLeave,
+            long requiredMinutes,
+            long graceMinutes,
+            int missingCheckoutMinutes,
+            int heartbeatStaleMinutes
+    ) {
         Instant from = businessClock.startOfDay(workDate);
         Instant to = businessClock.startOfDay(workDate.plusDays(1));
         Instant firstStart = sessions.stream()
@@ -320,8 +348,6 @@ public class AttendanceSessionService {
         long totalMinutes = sessions.stream()
                 .mapToLong(session -> calculationService.netMinutes(session, from, to, now))
                 .sum();
-        long requiredMinutes = settingsService.attendanceRequiredMinutes();
-        long graceMinutes = settingsService.attendanceGraceMinutes();
         long remainingMinutes = Math.max(requiredMinutes - totalMinutes, 0);
 
         return new AttendanceDaySummaryResponse(
@@ -337,7 +363,11 @@ public class AttendanceSessionService {
                 remainingMinutes,
                 Math.max(totalMinutes - requiredMinutes, 0),
                 Math.max(requiredMinutes - totalMinutes, 0),
-                resolveStatus(workDate, totalMinutes, activeStart, activeBreakStart, activeLastHeartbeat, sessions.isEmpty(), onLeave, now)
+                resolveStatus(
+                        workDate, totalMinutes, activeStart, activeBreakStart, activeLastHeartbeat,
+                        sessions.isEmpty(), onLeave, now, requiredMinutes, graceMinutes,
+                        missingCheckoutMinutes, heartbeatStaleMinutes
+                )
         );
     }
 
@@ -349,15 +379,19 @@ public class AttendanceSessionService {
             Instant activeLastHeartbeat,
             boolean noSessions,
             boolean onLeave,
-            Instant now
+            Instant now,
+            long requiredMinutes,
+            long graceMinutes,
+            int missingCheckoutMinutes,
+            int heartbeatStaleMinutes
     ) {
         if (onLeave && noSessions) {
             return AttendanceDayStatus.ON_LEAVE;
         }
-        if (activeStart != null && isHeartbeatStale(activeLastHeartbeat, now)) {
+        if (activeStart != null && isHeartbeatStale(activeLastHeartbeat, now, heartbeatStaleMinutes)) {
             return AttendanceDayStatus.MISSING_CHECKOUT;
         }
-        if (activeStart != null && isStaleSession(workDate, activeStart, now)) {
+        if (activeStart != null && isStaleSession(workDate, activeStart, now, missingCheckoutMinutes)) {
             return AttendanceDayStatus.MISSING_CHECKOUT;
         }
         if (onLeave && !noSessions) {
@@ -372,24 +406,28 @@ public class AttendanceSessionService {
         if (noSessions) {
             return AttendanceDayStatus.NO_ACTIVITY;
         }
-        if (totalMinutes >= settingsService.attendanceRequiredMinutes()) {
-            return totalMinutes > settingsService.attendanceRequiredMinutes()
+        if (totalMinutes >= requiredMinutes) {
+            return totalMinutes > requiredMinutes
                     ? AttendanceDayStatus.OVERTIME
                     : AttendanceDayStatus.COMPLETED;
         }
-        if (totalMinutes >= settingsService.attendanceGraceMinutes()) {
+        if (totalMinutes >= graceMinutes) {
             return AttendanceDayStatus.COMPLETED_WITH_GRACE;
         }
         return AttendanceDayStatus.UNDER_HOURS;
     }
 
-    private boolean isStaleSession(LocalDate workDate, Instant activeStart, Instant now) {
+    private boolean isStaleSession(
+            LocalDate workDate, Instant activeStart, Instant now, int missingCheckoutMinutes
+    ) {
         LocalDate today = businessClock.today();
-        return workDate.isBefore(today) || Duration.between(activeStart, now).toMinutes() >= settingsService.attendanceMissingCheckoutMinutes();
+        return workDate.isBefore(today)
+                || Duration.between(activeStart, now).toMinutes() >= missingCheckoutMinutes;
     }
 
-    private boolean isHeartbeatStale(Instant lastHeartbeatAt, Instant now) {
-        return lastHeartbeatAt != null && Duration.between(lastHeartbeatAt, now).toMinutes() >= settingsService.attendanceHeartbeatStaleMinutes();
+    private boolean isHeartbeatStale(Instant lastHeartbeatAt, Instant now, int heartbeatStaleMinutes) {
+        return lastHeartbeatAt != null
+                && Duration.between(lastHeartbeatAt, now).toMinutes() >= heartbeatStaleMinutes;
     }
 
     private boolean isOnApprovedLeave(Long userId, LocalDate date) {

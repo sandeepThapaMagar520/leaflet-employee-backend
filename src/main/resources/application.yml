@@ -46,7 +46,7 @@ app:
     frontend-base-url: ${FRONTEND_BASE_URL:http://localhost:3000}
   outbox:
     worker-enabled: ${OUTBOX_WORKER_ENABLED:false}
-    poll-interval: ${OUTBOX_POLL_INTERVAL:10s}
+    poll-interval: ${OUTBOX_POLL_INTERVAL:2s}
     batch-size: ${OUTBOX_BATCH_SIZE:20}
     concurrency: ${OUTBOX_WORKER_CONCURRENCY:2}
     processing-timeout: ${OUTBOX_PROCESSING_TIMEOUT:5m}
@@ -72,6 +72,12 @@ app:
       max-session-minutes: ${ATTENDANCE_MAX_SESSION_MINUTES:1440}
       correction-deadline-days: ${ATTENDANCE_CORRECTION_DEADLINE_DAYS:30}
   security:
+    api-rate-limit:
+      enabled: ${API_RATE_LIMIT_ENABLED:true}
+      read-requests-per-minute: ${API_READ_REQUESTS_PER_MINUTE:120}
+      write-requests-per-minute: ${API_WRITE_REQUESTS_PER_MINUTE:30}
+      expensive-read-requests-per-minute: ${API_EXPENSIVE_READ_REQUESTS_PER_MINUTE:30}
+      export-requests-per-minute: ${API_EXPORT_REQUESTS_PER_MINUTE:10}
     jwt:
       secret: ${JWT_SECRET:}
       expiration-ms: ${JWT_EXPIRATION_MS:900000}
@@ -83,9 +89,10 @@ app:
       reset-token-validity-seconds: ${RESET_TOKEN_VALIDITY_SECONDS:600}
       resend-cooldown-seconds: ${OTP_RESEND_COOLDOWN_SECONDS:60}
       maximum-verification-attempts: ${OTP_MAX_VERIFICATION_ATTEMPTS:5}
-      account-issuance-limit-per-hour: ${OTP_ACCOUNT_ISSUANCE_LIMIT_PER_HOUR:5}
-      ip-issuance-limit-per-hour: ${OTP_IP_ISSUANCE_LIMIT_PER_HOUR:20}
-      account-issuance-limit-per-day: ${OTP_ACCOUNT_ISSUANCE_LIMIT_PER_DAY:10}
+      account-issuance-limit-per-minute: ${OTP_ACCOUNT_ISSUANCE_LIMIT_PER_MINUTE:10}
+      account-issuance-limit-per-hour: ${OTP_ACCOUNT_ISSUANCE_LIMIT_PER_HOUR:30}
+      ip-issuance-limit-per-hour: ${OTP_IP_ISSUANCE_LIMIT_PER_HOUR:100}
+      account-issuance-limit-per-day: ${OTP_ACCOUNT_ISSUANCE_LIMIT_PER_DAY:100}
       account-verification-limit-per-fifteen-minutes: ${OTP_ACCOUNT_VERIFICATION_LIMIT_PER_15_MINUTES:20}
       ip-verification-limit-per-fifteen-minutes: ${OTP_IP_VERIFICATION_LIMIT_PER_15_MINUTES:60}
     emergency-admin-bootstrap:

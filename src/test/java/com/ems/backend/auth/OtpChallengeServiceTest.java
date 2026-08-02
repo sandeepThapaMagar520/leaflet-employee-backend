@@ -113,7 +113,7 @@ class OtpChallengeServiceTest {
     }
 
     private OtpSecurityProperties properties() {
-        return new OtpSecurityProperties(600, 600, 60, 5, 5, 20, 10, 20, 60);
+        return new OtpSecurityProperties(600, 600, 60, 5, 10, 30, 100, 100, 20, 60);
     }
 
     private User challengeUser() {

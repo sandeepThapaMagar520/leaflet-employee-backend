@@ -5,29 +5,36 @@ import org.springframework.web.server.ResponseStatusException;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class LoginRateLimiterTest {
     @Test
-    void blocksAfterTooManyFailures() {
-        LoginRateLimiter limiter = new LoginRateLimiter();
+    void blocksWhenDurableLimitIsExhausted() {
+        DatabaseRateLimitService rateLimitService = mock(DatabaseRateLimitService.class);
+        when(rateLimitService.consume(eq("login-attempt"), eq("account"), any(), any(), anyInt()))
+                .thenReturn(false);
+        LoginRateLimiter limiter = new LoginRateLimiter(rateLimitService);
         String email = "user@example.com";
-
-        for (int i = 0; i < 5; i++) {
-            limiter.recordFailure(email);
-        }
 
         assertThrows(ResponseStatusException.class, () -> limiter.checkAllowed(email));
     }
 
     @Test
-    void clearsFailuresAfterSuccessfulLogin() {
-        LoginRateLimiter limiter = new LoginRateLimiter();
+    void clearsDurableCounterAfterSuccessfulLogin() {
+        DatabaseRateLimitService rateLimitService = mock(DatabaseRateLimitService.class);
+        when(rateLimitService.consume(eq("login-attempt"), eq("account"), any(), any(), anyInt()))
+                .thenReturn(true);
+        LoginRateLimiter limiter = new LoginRateLimiter(rateLimitService);
         String email = "user@example.com";
 
-        limiter.recordFailure(email);
-        limiter.recordFailure(email);
+        assertDoesNotThrow(() -> limiter.checkAllowed(email));
         limiter.clear(email);
 
-        assertDoesNotThrow(() -> limiter.checkAllowed(email));
+        verify(rateLimitService).reset("login-attempt", "account", email);
     }
 }

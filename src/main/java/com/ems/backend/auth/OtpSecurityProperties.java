@@ -8,6 +8,7 @@ public record OtpSecurityProperties(
         long resetTokenValiditySeconds,
         long resendCooldownSeconds,
         int maximumVerificationAttempts,
+        int accountIssuanceLimitPerMinute,
         int accountIssuanceLimitPerHour,
         int ipIssuanceLimitPerHour,
         int accountIssuanceLimitPerDay,

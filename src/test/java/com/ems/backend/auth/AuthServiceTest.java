@@ -22,6 +22,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Optional;
@@ -184,8 +186,18 @@ class AuthServiceTest {
                 otpChallengeService,
                 passwordResetService,
                 securityAuditService,
-                emailChangeOtpService
+                emailChangeOtpService,
+                immediateTransactions()
         );
+    }
+
+    private TransactionOperations immediateTransactions() {
+        return new TransactionOperations() {
+            @Override
+            public <T> T execute(TransactionCallback<T> action) {
+                return action.doInTransaction(null);
+            }
+        };
     }
 
     private User user() {
