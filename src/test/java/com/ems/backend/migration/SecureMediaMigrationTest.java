@@ -72,7 +72,7 @@ class SecureMediaMigrationTest {
                 .load();
         latest.migrate();
 
-        assertEquals("41", latest.info().current().getVersion().getVersion());
+        assertEquals("42", latest.info().current().getVersion().getVersion());
         assertTrue(latest.validateWithResult().validationSuccessful);
         assertEquals(0, scalar("""
                 SELECT COUNT(*) FROM media_assets WHERE status IN ('VERIFIED', 'ATTACHED')
@@ -147,7 +147,7 @@ class SecureMediaMigrationTest {
                 .load();
         latest.migrate();
 
-        assertEquals("41", latest.info().current().getVersion().getVersion());
+        assertEquals("42", latest.info().current().getVersion().getVersion());
         assertEquals(1, scalar("""
                 SELECT COUNT(*) FROM media_assets
                 WHERE id = '11111111-1111-1111-1111-111111111111'

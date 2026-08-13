@@ -6,6 +6,7 @@ import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -17,6 +18,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
+import org.testcontainers.DockerClientFactory;
+import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.util.List;
 
@@ -25,19 +28,36 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
 @Transactional
-@EnabledIf("externalDatabaseConfigured")
+@EnabledIf("databaseAvailable")
 class ProjectQueryBudgetIntegrationTest {
+    private static PostgreSQLContainer<?> postgres;
+
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", () -> System.getProperty("leaflet.test.database.url"));
-        registry.add("spring.datasource.username", () -> System.getProperty("leaflet.test.database.username", "postgres"));
-        registry.add("spring.datasource.password", () -> System.getProperty("leaflet.test.database.password", ""));
+        String externalUrl = System.getProperty("leaflet.test.database.url");
+        if (externalUrl != null && !externalUrl.isBlank()) {
+            registry.add("spring.datasource.url", () -> externalUrl);
+            registry.add("spring.datasource.username", () -> System.getProperty("leaflet.test.database.username", "postgres"));
+            registry.add("spring.datasource.password", () -> System.getProperty("leaflet.test.database.password", ""));
+        } else {
+            postgres = new PostgreSQLContainer<>("postgres:17-alpine");
+            postgres.start();
+            registry.add("spring.datasource.url", postgres::getJdbcUrl);
+            registry.add("spring.datasource.username", postgres::getUsername);
+            registry.add("spring.datasource.password", postgres::getPassword);
+        }
         registry.add("app.mail.enabled", () -> "false");
     }
 
-    static boolean externalDatabaseConfigured() {
+    static boolean databaseAvailable() {
         String url = System.getProperty("leaflet.test.database.url");
-        return url != null && !url.isBlank();
+        return (url != null && !url.isBlank())
+                || DockerClientFactory.instance().isDockerAvailable();
+    }
+
+    @AfterAll
+    static void stopContainer() {
+        if (postgres != null) postgres.stop();
     }
 
     @Autowired private ProjectService projectService;
@@ -95,12 +115,14 @@ class ProjectQueryBudgetIntegrationTest {
     }
 
     @Test
-    void projectListQueryCountIsConstantAsPageSizeGrows() {
+    void projectListQueryCountStaysWithinBudgetAsPageSizeGrows() {
         long oneRowQueries = measuredQueries(1);
         long twentyRowQueries = measuredQueries(20);
 
-        assertEquals(oneRowQueries, twentyRowQueries);
-        assertEquals(8, twentyRowQueries, "unexpected project page query plan");
+        // The full page executes Spring Data's count query; the last partial page can omit it.
+        assertEquals(8, oneRowQueries, "unexpected full project page query plan");
+        assertEquals(7, twentyRowQueries, "unexpected partial project page query plan");
+        assertTrue(oneRowQueries <= 8, "project page query budget exceeded: " + oneRowQueries);
         assertTrue(twentyRowQueries <= 8, "project page query budget exceeded: " + twentyRowQueries);
     }
 

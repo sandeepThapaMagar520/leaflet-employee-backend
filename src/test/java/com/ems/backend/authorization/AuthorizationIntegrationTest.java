@@ -36,6 +36,7 @@ import jakarta.persistence.EntityManagerFactory;
 import java.util.UUID;
 import java.util.List;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.function.BiConsumer;
@@ -690,17 +691,18 @@ class AuthorizationIntegrationTest {
     }
 
     private long createLeave(User user, String reason) throws Exception {
+        LocalDate leaveDate = LocalDate.now().plusDays(10);
         String response = mockMvc.perform(post("/api/v1/leave-requests")
                         .header("Authorization", bearer(user))
                         .contentType("application/json")
                         .content("""
                                 {
                                   "leaveType":"ANNUAL",
-                                  "startDate":"2026-08-10",
-                                  "endDate":"2026-08-10",
+                                  "startDate":"%s",
+                                  "endDate":"%s",
                                   "reason":"%s"
                                 }
-                                """.formatted(reason)))
+                                """.formatted(leaveDate, leaveDate, reason)))
                 .andExpect(status().isOk())
                 .andReturn()
                 .getResponse()

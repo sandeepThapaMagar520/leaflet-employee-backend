@@ -36,7 +36,7 @@ Create a Render Web Service from this repository.
 - Branch: `main`
 - Dockerfile path: `./Dockerfile`
 - Docker command: leave empty
-- Health check path: `/api/v1/health`
+- Health check path: `/actuator/health/readiness`
 
 Required environment variables:
 

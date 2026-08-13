@@ -1,7 +1,11 @@
 package com.ems.backend.media;
 
 import jakarta.servlet.http.Part;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.mock.web.MockPart;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
@@ -13,10 +17,29 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class MediaControllerTest {
+    private final MediaUploadService uploadService = mock(MediaUploadService.class);
     private final MediaController controller = new MediaController(
-            mock(MediaUploadService.class),
-            mock(MediaDeliveryService.class)
+            uploadService, mock(MediaDeliveryService.class)
     );
+
+    @BeforeEach
+    void resetUploadService() {
+        org.mockito.Mockito.reset(uploadService);
+    }
+
+    @Test
+    void acceptsBrowserStylePurposeFormFieldWithoutPartContentType() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addPart(new MockPart("purpose", "HR_DOCUMENT".getBytes()));
+        request.addPart(new MockPart("file", "document.pdf", new byte[]{1}));
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "document.pdf", "application/pdf", new byte[]{1}
+        );
+
+        controller.upload(UploadPurpose.HR_DOCUMENT, file, request);
+
+        org.mockito.Mockito.verify(uploadService).upload(UploadPurpose.HR_DOCUMENT, file);
+    }
 
     @Test
     void acceptsExactlyOnePurposeAndOneFile() {

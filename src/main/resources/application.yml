@@ -144,6 +144,11 @@ management:
   endpoint:
     health:
       show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
   metrics:
     tags:
       application: ${spring.application.name}

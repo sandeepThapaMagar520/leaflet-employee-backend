@@ -103,6 +103,7 @@ class SecurityIntegrationTest {
 
     @Autowired private MockMvc mockMvc;
     @Autowired private UserRepository userRepository;
+    @Autowired private AuthenticationStateCache authenticationStateCache;
     @Autowired private JwtService jwtService;
     @Autowired private TokenHashingService tokenHashingService;
     @Autowired private PasswordResetService passwordResetService;
@@ -181,10 +182,18 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void readinessHealthIsPublicAndIncludesDatabaseAvailability() throws Exception {
+        mockMvc.perform(get("/actuator/health/readiness"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
+    }
+
+    @Test
     void revokedAndDisabledTokensFailWhileDatabaseRoleChangesTakeEffect() throws Exception {
         String employeeToken = jwtService.generateToken(employee);
         employee.setRole(Role.ADMIN);
         employee = userRepository.saveAndFlush(employee);
+        authenticationStateCache.evictUserAfterCommit(employee.getId());
 
         mockMvc.perform(get("/api/v1/users/summary")
                         .header("Authorization", "Bearer " + employeeToken))
@@ -192,6 +201,7 @@ class SecurityIntegrationTest {
 
         employee.setSecurityVersion(2);
         employee = userRepository.saveAndFlush(employee);
+        authenticationStateCache.evictUserAfterCommit(employee.getId());
         mockMvc.perform(get("/api/v1/users/me")
                         .header("Authorization", "Bearer " + employeeToken))
                 .andExpect(status().isUnauthorized());
@@ -203,6 +213,7 @@ class SecurityIntegrationTest {
 
         employee.setActive(false);
         userRepository.saveAndFlush(employee);
+        authenticationStateCache.evictUserAfterCommit(employee.getId());
         mockMvc.perform(get("/api/v1/users/me")
                         .header("Authorization", "Bearer " + replacement))
                 .andExpect(status().isUnauthorized());

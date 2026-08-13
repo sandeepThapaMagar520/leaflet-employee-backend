@@ -46,7 +46,7 @@ class DatabaseIntegrityMigrationTest {
         flyway.clean();
         flyway.migrate();
 
-        assertEquals("41", flyway.info().current().getVersion().getVersion());
+        assertEquals("42", flyway.info().current().getVersion().getVersion());
         assertTrue(flyway.validateWithResult().validationSuccessful);
         assertEquals(7, scalar("""
                 SELECT COUNT(*) FROM pg_indexes

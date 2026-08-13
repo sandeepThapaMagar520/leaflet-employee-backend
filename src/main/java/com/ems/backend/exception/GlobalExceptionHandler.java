@@ -3,6 +3,7 @@ package com.ems.backend.exception;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.validation.FieldError;
@@ -87,6 +88,19 @@ public class GlobalExceptionHandler {
                 HttpStatus.BAD_REQUEST,
                 "UPLOAD_REQUEST_INVALID",
                 "The upload request must contain one valid purpose and one file.",
+                request
+        );
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<?> handleUnsupportedMediaType(
+            HttpMediaTypeNotSupportedException exception,
+            HttpServletRequest request
+    ) {
+        return response(
+                HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+                "CONTENT_TYPE_UNSUPPORTED",
+                "The request content type is not supported.",
                 request
         );
     }
