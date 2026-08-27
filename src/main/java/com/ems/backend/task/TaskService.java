@@ -162,7 +162,9 @@ public class TaskService {
     @Transactional(readOnly = true)
     public TaskResponse getTask(Long taskId) {
         Task task = getTaskById(taskId);
-        projectAccessService.requireAccessibleProject(task.getProject().getId(), getCurrentUser());
+        if (!projectAccessService.canAccessProject(getCurrentUser(), task.getProject())) {
+            throw new ResponseStatusException(FORBIDDEN, "You do not have access to this project");
+        }
         return map(task);
     }
 
