@@ -71,6 +71,13 @@ public class TaskController {
         return taskService.getMyTasks(page, size, sortBy, sortDir);
     }
 
+    @GetMapping("/{taskId}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
+    @Operation(summary = "Get task", description = "Returns a task only when the current user can access its project.")
+    public TaskResponse getTask(@PathVariable Long taskId) {
+        return taskService.getTask(taskId);
+    }
+
     @PutMapping("/{taskId}")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'EMPLOYEE')")
     @Operation(summary = "Update task", description = "Project managers, admins, and delegated employees can edit task details.")

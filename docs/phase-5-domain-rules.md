@@ -68,11 +68,11 @@ The skipped Phase 4 PostgreSQL suite was executed against PostgreSQL 15.18 befor
 ### Tasks
 
 - Core transitions are:
-  - `TODO -> IN_PROGRESS | BLOCKED`
+  - `TODO -> IN_PROGRESS | BLOCKED | DONE`
   - `IN_PROGRESS -> BLOCKED | DONE`
-  - `BLOCKED -> IN_PROGRESS`
+  - `BLOCKED -> IN_PROGRESS | DONE`
   - `DONE -> IN_PROGRESS` only for a project task manager
-- Custom-board moves are limited to an adjacent configured board. Reopening a terminal custom board requires project task-management authority.
+- Any active custom-board task can move directly to `DONE`; other custom-board moves are limited to an adjacent configured board. Reopening a terminal custom board requires project task-management authority.
 - Completed-project tasks are read-only.
 - Task status changes, completion, and reopening are audited.
 - Transactional task notifications now persist in-app only, avoiding external email I/O in the transaction.

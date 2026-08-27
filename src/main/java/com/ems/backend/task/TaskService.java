@@ -159,6 +159,13 @@ public class TaskService {
         return taskRepository.findByAssignedToIdWithDetails(userId).stream().map(this::map).toList();
     }
 
+    @Transactional(readOnly = true)
+    public TaskResponse getTask(Long taskId) {
+        Task task = getTaskById(taskId);
+        projectAccessService.requireAccessibleProject(task.getProject().getId(), getCurrentUser());
+        return map(task);
+    }
+
     public TaskResponse updateTask(Long taskId, UpdateTaskRequest request) {
         Task task = getTaskById(taskId);
         User currentUser = getCurrentUser();

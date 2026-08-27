@@ -293,6 +293,44 @@ class AuthorizationIntegrationTest {
     }
 
     @Test
+    void administratorCanEditTaskAndCompleteItDirectlyFromTodo() throws Exception {
+        long projectId = createProject(admin, manager, secondManager, employee).get("id").asLong();
+        long taskId = jdbcTemplate.queryForObject("""
+                INSERT INTO tasks(
+                    title, description, status, priority, project_id, assigned_to_id, created_by_id
+                ) VALUES ('Original task', 'Original description', 'TODO', 'MEDIUM', ?, ?, ?)
+                RETURNING id
+                """, Long.class, projectId, employee.getId(), admin.getId());
+
+        mockMvc.perform(get("/api/v1/tasks/{taskId}", taskId)
+                        .header("Authorization", bearer(admin)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(taskId));
+        mockMvc.perform(get("/api/v1/tasks/{taskId}", taskId)
+                        .header("Authorization", bearer(otherEmployee)))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(put("/api/v1/tasks/{taskId}", taskId)
+                        .header("Authorization", bearer(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "title":"Edited by administrator",
+                                  "description":"Administrator updated the task",
+                                  "status":"DONE",
+                                  "priority":"HIGH",
+                                  "dueDate":"%s",
+                                  "assignedToId":%d
+                                }
+                                """.formatted(LocalDate.now().plusDays(5), employee.getId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("Edited by administrator"))
+                .andExpect(jsonPath("$.status").value("DONE"))
+                .andExpect(jsonPath("$.priority").value("HIGH"))
+                .andExpect(jsonPath("$.assignedToId").value(employee.getId()));
+    }
+
+    @Test
     void concurrentReassignmentLeavesExactlyOneActiveRelationship() throws Exception {
         String adminAuthorization = bearer(admin);
         CountDownLatch start = new CountDownLatch(1);

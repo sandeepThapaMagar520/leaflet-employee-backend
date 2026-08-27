@@ -31,6 +31,16 @@ public class TaskTransitionPolicy {
         if ("DONE".equals(current) && !canReopen) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only a project task manager can reopen a completed task");
         }
+        if (!"DONE".equals(current) && "DONE".equals(target)) {
+            if (CORE.containsKey(current)) {
+                return;
+            }
+            List<ProjectTaskBoard> boards = boards(project);
+            int from = indexOf(boards, current);
+            if (from >= 0 && !boards.get(from).isTerminal()) {
+                return;
+            }
+        }
         if (CORE.containsKey(current) && CORE.containsKey(target)) {
             if (!CORE.get(current).contains(target)) {
                 reject(current, target);
@@ -38,8 +48,7 @@ public class TaskTransitionPolicy {
             return;
         }
 
-        List<ProjectTaskBoard> boards =
-                boardRepository.findByProjectIdOrderByDisplayOrderAscIdAsc(project.getId());
+        List<ProjectTaskBoard> boards = boards(project);
         int from = indexOf(boards, current);
         int to = indexOf(boards, target);
         if (from < 0 || to < 0 || Math.abs(from - to) != 1) {
@@ -48,6 +57,10 @@ public class TaskTransitionPolicy {
         if (boards.get(from).isTerminal() && !canReopen) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only a project task manager can reopen a terminal task");
         }
+    }
+
+    private List<ProjectTaskBoard> boards(Project project) {
+        return boardRepository.findByProjectIdOrderByDisplayOrderAscIdAsc(project.getId());
     }
 
     private int indexOf(List<ProjectTaskBoard> boards, String status) {
